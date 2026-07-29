@@ -1,0 +1,16 @@
+# SwiftPM
+.build/
+.swiftpm/configuration/
+*.xcuserstate
+
+# Xcode per-user state (keep xcshareddata/xcschemes)
+xcuserdata/
+
+# build-app.sh output
+build/
+
+# Bundled tools downloaded by build-app.sh (CPython, yt-dlp, ffmpeg)
+Scripts/.cache/
+
+# macOS
+.DS_Store
