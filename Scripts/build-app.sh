@@ -104,6 +104,24 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <!-- Menubar-only: no Dock icon, no app switcher entry. -->
     <key>LSUIElement</key>
     <true/>
+    <!-- Makes Finder's "Open With > BeatSnap" appear for audio, which queues the file for
+         analysis rather than playing it. Alternate rank so BeatSnap is never a candidate for
+         *default* audio handler. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Audio File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.audio</string>
+            </array>
+        </dict>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>

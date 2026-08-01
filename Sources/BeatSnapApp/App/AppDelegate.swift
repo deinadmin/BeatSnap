@@ -1,14 +1,18 @@
 import AppKit
 import Carbon.HIToolbox
+import Observation
 import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let library = BeatLibrary()
     private let preview = AudioPreview()
+    private let tools = ToolStatus()
     private var statusItem: NSStatusItem?
     private var panel: BeatPanel?
     private var hotKey: GlobalHotKey?
+    /// Last count painted into the menubar, so stage churn doesn't repaint needlessly.
+    private var badgedCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menubar-only: no Dock icon, no app switcher entry.
@@ -18,13 +22,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupHotKey()
         makePanel()
+        observeQueue()
+        // Files can arrive via `application(_:open:)` before this point, so paint once now.
+        updateBadge()
         showPanel()
 
-        Task { await Tools.updateYtDlpIfNeeded() }
+        Task { await tools.updateIfDue() }
     }
 
+    /// Closing the panel leaves the app alive in the menubar, still working through its queue.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// `open -a BeatSnap beat.wav` and Finder's "Open With" land here. Same queue as a drop.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let audio = urls.filter(\.isAudioFile)
+        guard !audio.isEmpty else { return }
+        library.importDroppedFiles(audio)
     }
 
     // MARK: - Main menu
@@ -135,6 +150,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
+    /// Show the queue depth next to the menubar icon.
+    ///
+    /// The panel is closable and the app has no Dock icon, so without this there'd be no sign
+    /// that work is still going on after the window is dismissed.
+    private func observeQueue() {
+        withObservationTracking {
+            _ = library.queue.count
+        } onChange: { [weak self] in
+            // `onChange` fires *before* the mutation lands, so read it back on the next turn
+            // of the main actor — and re-arm, since tracking is one-shot.
+            Task { @MainActor in
+                self?.updateBadge()
+                self?.observeQueue()
+            }
+        }
+    }
+
+    private func updateBadge() {
+        let count = library.pendingCount
+        guard count != badgedCount, let button = statusItem?.button else { return }
+        badgedCount = count
+
+        button.title = count > 0 ? " \(count)" : ""
+        button.imagePosition = count > 0 ? .imageLeading : .imageOnly
+        button.toolTip = count > 0 ? "BeatSnap — \(count) in queue" : "BeatSnap"
+    }
+
     private func setupHotKey() {
         hotKey = GlobalHotKey(
             keyCode: UInt32(kVK_ANSI_B),
@@ -147,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Panel
 
     private func makePanel() {
-        let root = RootView(library: library, preview: preview)
+        let root = RootView(library: library, preview: preview, tools: tools)
             .environment(library)
             .environment(preview)
         let panel = BeatPanel(content: root)
@@ -155,8 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.library.isDropTargeted = targeted
         }
         panel.dropHandler.onDrop = { [weak self] urls in
-            guard let self else { return }
-            Task { await self.library.importDroppedFiles(urls) }
+            self?.library.importDroppedFiles(urls)
         }
         self.panel = panel
     }
@@ -198,8 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let id = YouTubeDownloader.youtubeID(from: text)
         else { return }
 
-        guard !library.beats.contains(where: { $0.youtubeId == id }) else { return }
-        guard library.urlText.isEmpty, !library.isBusy else { return }
+        guard !library.isKnown(videoID: id), library.urlText.isEmpty else { return }
         library.urlText = text
     }
 }

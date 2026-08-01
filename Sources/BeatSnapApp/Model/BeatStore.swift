@@ -39,6 +39,29 @@ struct BeatStore {
         try? data.write(to: indexURL, options: .atomic)
     }
 
+    /// Whether `url` already sits directly in the beats folder, in which case an import can
+    /// rename it in place instead of leaving a second copy of the same audio behind.
+    func isInBeatsDirectory(_ url: URL) -> Bool {
+        url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL.path
+            == beatsDirectory().resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// Drop a trailing " [140BPM F#min]" tag, plus the " (2)" that `uniqueURL` may have added
+    /// right after it.
+    ///
+    /// Re-analysing a file BeatSnap (or the original app) already named would otherwise give
+    /// "title [140BPM F#min] [140BPM F#min]". Tonics are A-referenced with flats, so the key
+    /// is one of A-G plus an optional # or b. The "(n)" is only stripped when it directly
+    /// follows a tag — plenty of beat titles legitimately end in "(2023)".
+    static func stripAnalysisTag(from name: String) -> String {
+        name.replacingOccurrences(
+            of: #"\s*\[\d+BPM [A-G][#b]?(min|maj)\](\s*\(\d+\))?$"#,
+            with: "",
+            options: .regularExpression
+        )
+        .trimmingCharacters(in: .whitespaces)
+    }
+
     /// Strip characters that are awkward or illegal in macOS filenames.
     static func sanitize(filename: String) -> String {
         let cleaned = filename

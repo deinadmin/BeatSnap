@@ -34,16 +34,21 @@ struct Beat: Codable, Identifiable, Hashable {
     }
 }
 
-/// Stages of the download pipeline, surfaced as a live row in the list.
-enum DownloadStage: Equatable {
+/// Stages of the import pipeline, surfaced as a live row above the library.
+enum QueueStage: Equatable {
+    case waiting
     case starting
     case downloading(progress: Double?)
     case converting
     case analyzing
     case saving
+    /// Terminal. The row sticks around carrying the reason, because the panel may well have
+    /// been closed when this happened.
+    case failed(String)
 
     var label: String {
         switch self {
+        case .waiting: "Queued"
         case .starting: "Starting download…"
         case .downloading(let progress):
             if let progress { String(format: "Downloading… %.0f%%", progress * 100) }
@@ -51,12 +56,40 @@ enum DownloadStage: Equatable {
         case .converting: "Converting to WAV…"
         case .analyzing: "Analyzing BPM & key…"
         case .saving: "Saving…"
+        case .failed(let reason): reason
         }
+    }
+
+    var isWaiting: Bool { self == .waiting }
+
+    var isFailed: Bool {
+        if case .failed = self { true } else { false }
+    }
+
+    /// Download progress, when it's known.
+    var progress: Double? {
+        if case .downloading(let progress) = self { progress } else { nil }
     }
 }
 
-struct DownloadJob: Identifiable, Equatable {
+/// One unit of queued work. A YouTube link and a dropped file differ only in how the audio
+/// arrives — both end as an analysed file in the beats folder — so they share a queue.
+struct QueueItem: Identifiable, Equatable {
+    enum Source: Equatable {
+        case youtube(url: String, info: VideoInfo)
+        case file(URL)
+    }
+
     let id = UUID()
     var title: String
-    var stage: DownloadStage
+    var source: Source
+    var stage: QueueStage = .waiting
+
+    var videoID: String? {
+        if case .youtube(_, let info) = source { info.id } else { nil }
+    }
+
+    var fileURL: URL? {
+        if case .file(let url) = source { url } else { nil }
+    }
 }

@@ -3,8 +3,10 @@ import SwiftUI
 struct RootView: View {
     @Bindable var library: BeatLibrary
     let preview: AudioPreview
+    let tools: ToolStatus
 
     @FocusState private var urlFieldFocused: Bool
+    @State private var showingInfo = false
 
     var body: some View {
         ZStack {
@@ -15,12 +17,18 @@ struct RootView: View {
                 content
             }
 
+            if showingInfo {
+                InfoCard(tools: tools) { showingInfo = false }
+            }
+
+            // Above the info card: a drag is in progress, so its feedback wins.
             if library.isDropTargeted {
                 DropOverlay()
                     .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.14), value: library.isDropTargeted)
+        .animation(.easeOut(duration: 0.16), value: showingInfo)
         .frame(minWidth: 380, minHeight: 420)
         .onReceive(NotificationCenter.default.publisher(for: .beatSnapPanelShown)) { _ in
             // Let the panel settle before taking first responder.
@@ -36,9 +44,7 @@ struct RootView: View {
             )
         ) {
             Button("Cancel", role: .cancel) { library.pendingLongVideo = nil }
-            Button("Proceed") {
-                Task { await library.confirmPendingLongVideo() }
-            }
+            Button("Proceed") { library.confirmPendingLongVideo() }
         } message: {
             Text("This video is longer than 10 minutes, do you want to proceed?")
         }
@@ -56,14 +62,19 @@ struct RootView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            CircleIconButton(systemName: "folder", help: "Open beats folder") {
-                library.openBeatsFolder()
-            }
-            .contextMenu {
-                Button("Open Beats Folder") { library.openBeatsFolder() }
-                Button("Change Beats Folder…") { library.chooseDownloadFolder() }
-                Button("Reset Beats Folder to Default") { library.resetDownloadFolder() }
-                    .disabled(!library.usingCustomFolder)
+            HStack(spacing: 6) {
+                CircleIconButton(systemName: "info", help: "About Beat Snap") {
+                    showingInfo.toggle()
+                }
+                CircleIconButton(systemName: "folder", help: "Open beats folder") {
+                    library.openBeatsFolder()
+                }
+                .contextMenu {
+                    Button("Open Beats Folder") { library.openBeatsFolder() }
+                    Button("Change Beats Folder…") { library.chooseDownloadFolder() }
+                    Button("Reset Beats Folder to Default") { library.resetDownloadFolder() }
+                        .disabled(!library.usingCustomFolder)
+                }
             }
         }
         // The traffic lights end at x=79 and are centred 26pt below the window top.
@@ -89,9 +100,9 @@ struct RootView: View {
                     .padding(.vertical, 7)
                     .background(.quaternary.opacity(0.55), in: Capsule())
                     .overlay(Capsule().strokeBorder(.quaternary.opacity(0.6)))
+                    // Never disabled: a link pasted mid-download just joins the queue.
                     .focused($urlFieldFocused)
                     .onSubmit { submit() }
-                    .disabled(library.job != nil)
 
                 AccentButton(
                     title: library.isCheckingLink ? "Checking…" : "Download",
@@ -111,7 +122,8 @@ struct RootView: View {
     }
 
     private var canSubmit: Bool {
-        !library.urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !library.isBusy
+        !library.urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !library.isCheckingLink
     }
 
     private func submit() {
@@ -123,19 +135,22 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if library.beats.isEmpty && library.job == nil {
+        if library.beats.isEmpty && library.queue.isEmpty {
             EmptyLibraryView()
         } else {
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    if let job = library.job {
-                        JobRow(job: job)
+                    // Queued work sits above the library, oldest first, so a batch drop reads
+                    // top-to-bottom in the order it will be worked through.
+                    ForEach(library.queue) { item in
+                        QueueRow(item: item)
                     }
                     ForEach(library.beats) { beat in
                         BeatRowView(beat: beat)
                     }
                 }
                 .padding(8)
+                .animation(.easeOut(duration: 0.18), value: library.queue.count)
             }
             .scrollContentBackground(.hidden)
         }
@@ -147,9 +162,13 @@ struct RootView: View {
 private struct DropOverlay: View {
     var body: some View {
         ZStack {
-            // Mute the panel behind the prompt so it reads as a single target.
+            // Blurs the interface rather than dimming it. A `Material` used *inside* the
+            // hierarchy blends within the window (only `.containerBackground(for: .window)`
+            // switches to behind-window), so the beat list genuinely goes soft instead of
+            // the desktop bleeding through. The accent wash sits on top of the blur.
             Rectangle()
-                .fill(.background.opacity(0.6))
+                .fill(.thinMaterial)
+                .overlay(Design.bpmTint.opacity(0.08))
 
             card
                 .transition(.scale(scale: 0.94).combined(with: .opacity))
@@ -157,18 +176,21 @@ private struct DropOverlay: View {
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .strokeBorder(
-                    Design.bpmTint.opacity(0.8),
+                    Design.bpmTint.opacity(0.85),
                     style: StrokeStyle(lineWidth: 2, dash: [7, 5])
                 )
                 .padding(7)
         )
     }
 
+    /// Liquid Glass, matching the panel's glass header buttons and Download pill. The stroke
+    /// keeps the card's edge readable where the glass and the blur behind it are similar.
     private var card: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
             Image(systemName: "waveform.badge.plus")
-                .font(.system(size: 28, weight: .regular))
+                .font(.system(size: 27, weight: .regular))
                 .foregroundStyle(Design.bpmTint)
+                .padding(.bottom, 1)
             Text("Drop to analyze")
                 .font(.system(size: 13.5, weight: .semibold))
             Text("Detects BPM and key, then adds it\nto your beats folder.")
@@ -176,39 +198,111 @@ private struct DropOverlay: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 26)
         .padding(.vertical, 20)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(Design.bpmTint.opacity(0.3), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
     }
 }
 
-/// Live row shown while a download is in flight.
-private struct JobRow: View {
-    let job: DownloadJob
+/// A queued, in-flight or failed item. Deliberately the same metrics as `BeatRowView` so a
+/// row doesn't jump when it finishes and becomes a real beat.
+private struct QueueRow: View {
+    let item: QueueItem
+
+    @Environment(BeatLibrary.self) private var library
+
+    @State private var isHovering = false
+
+    /// Only work that isn't running can be taken back: queued items and failed receipts.
+    private var isDismissable: Bool { item.stage.isWaiting || item.stage.isFailed }
 
     var body: some View {
         HStack(spacing: 11) {
-            ZStack {
-                RoundedRectangle(cornerRadius: Design.rowCorner)
-                    .fill(.quaternary.opacity(0.55))
+            StageTile(stage: item.stage)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(item.stage.label)
+                    .font(.system(size: 11))
+                    .foregroundStyle(item.stage.isFailed ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            if isDismissable && isHovering {
+                RowIconButton(
+                    systemName: "xmark",
+                    help: item.stage.isFailed ? "Dismiss" : "Remove from queue"
+                ) {
+                    library.remove(item)
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        // Waiting rows recede so the one being worked on reads as the active row.
+        .opacity(item.stage.isWaiting ? 0.6 : 1)
+        .background(
+            RoundedRectangle(cornerRadius: Design.rowCorner)
+                .fill(.quaternary.opacity(isHovering ? 0.5 : 0))
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering }
+        }
+    }
+}
+
+/// The preview tile's slot, showing what the item is currently doing.
+private struct StageTile: View {
+    let stage: QueueStage
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Design.rowCorner)
+                .fill(.quaternary.opacity(0.55))
+
+            if stage.isFailed {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.red)
+            } else if stage.isWaiting {
+                Image(systemName: "clock")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            } else if let progress = stage.progress {
+                // Hand-drawn ring rather than a determinate ProgressView, matching the
+                // playback ring on a finished beat's tile.
+                Circle()
+                    .stroke(.primary.opacity(0.12), lineWidth: 2)
+                    .padding(3)
+                Circle()
+                    .trim(from: 0, to: max(0.02, progress))
+                    .stroke(Design.bpmTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .padding(3)
+                    .animation(.easeOut(duration: 0.2), value: progress)
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            } else {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.8)
             }
-            .frame(width: Design.tileSize, height: Design.tileSize)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(job.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-                Text(job.stage.label)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        .frame(width: Design.tileSize, height: Design.tileSize)
     }
 }
 
@@ -217,15 +311,20 @@ private struct ErrorCallout: View {
     let dismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+        // The icon tracks the first line of a wrapped message, while the dismiss button
+        // centres on the callout as a whole — hence the nested stack rather than one
+        // alignment for all three.
+        HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
             Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))

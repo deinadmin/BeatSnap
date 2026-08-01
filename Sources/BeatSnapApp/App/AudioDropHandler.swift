@@ -61,6 +61,16 @@ final class AudioDropHandler {
     }
 }
 
+extension URL {
+    /// Whether this is an audio file, tested by declared content type rather than by
+    /// matching a list of extensions. The pasteboard equivalent is
+    /// `.urlReadingContentsConformToTypes`, which AppKit evaluates the same way.
+    var isAudioFile: Bool {
+        let type = try? resourceValues(forKeys: [.contentTypeKey]).contentType
+        return type?.conforms(to: .audio) ?? false
+    }
+}
+
 /// The panel's vibrancy view, doubling as the drag destination nearest the content.
 final class DropTargetEffectView: NSVisualEffectView {
     private let dropHandler: AudioDropHandler

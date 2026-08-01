@@ -1,6 +1,6 @@
 import Foundation
 
-struct VideoInfo {
+struct VideoInfo: Equatable {
     var id: String
     var title: String
     var durationSec: Int
@@ -154,7 +154,20 @@ enum YouTubeDownloader {
             .map(String.init)?
             .replacingOccurrences(of: "ERROR: ", with: "")
             .trimmingCharacters(in: .whitespaces)
-        if let errorLine, !errorLine.isEmpty { return errorLine }
+        if let errorLine {
+            let cleaned = stripExtractorTags(errorLine)
+            if !cleaned.isEmpty { return cleaned }
+        }
         return "Download failed. Check the link and try again."
+    }
+
+    /// yt-dlp prefixes its reason with the extractor that produced it ("[generic] Unable to
+    /// download webpage"), which means nothing to someone who just pasted a link.
+    private static func stripExtractorTags(_ message: String) -> String {
+        var result = message
+        while result.hasPrefix("["), let end = result.firstIndex(of: "]") {
+            result = String(result[result.index(after: end)...]).trimmingCharacters(in: .whitespaces)
+        }
+        return result
     }
 }
