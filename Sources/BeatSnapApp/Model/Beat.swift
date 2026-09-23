@@ -1,10 +1,9 @@
 import Foundation
 
-/// A downloaded, analysed beat. Mirrors the JSON shape of the original library index so
-/// an existing `beats.json` stays readable.
+/// A tagged audio file in the selected beats folder, including cloud-only items.
 struct Beat: Codable, Identifiable, Hashable {
     var id: String
-    /// Original video title.
+    /// Title without the trailing analysis tag.
     var title: String
     /// Final filename including BPM/key, e.g. "Title [140BPM F#min].wav".
     var fileName: String
@@ -18,6 +17,8 @@ struct Beat: Codable, Identifiable, Hashable {
     var createdAt: Double
     /// Used to skip re-downloading the same video.
     var youtubeId: String?
+    /// Metadata-only files stay visible without opening their audio or starting a download.
+    var needsDownload = false
 
     var fileURL: URL { URL(fileURLWithPath: filePath) }
 
@@ -32,6 +33,47 @@ struct Beat: Codable, Identifiable, Hashable {
         let suffix = String(UUID().uuidString.prefix(6)).lowercased()
         return "\(Int(Date().timeIntervalSince1970 * 1000))-\(suffix)"
     }
+}
+
+/// A user-selectable musical key. BeatSnap deliberately uses flats for the black keys
+/// where the analyzer does, keeping display names and filename tags consistent.
+struct BeatKey: Hashable {
+    enum Mode: String, CaseIterable, Identifiable {
+        case minor
+        case major
+
+        var id: Self { self }
+        var label: String { rawValue.capitalized }
+        var filenameSuffix: String { self == .minor ? "min" : "maj" }
+    }
+
+    static let tonics = ["A", "Bb", "B", "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab"]
+
+    let tonic: String
+    let mode: Mode
+
+    init(tonic: String, mode: Mode) {
+        self.tonic = tonic
+        self.mode = mode
+    }
+
+    init?(displayName: String) {
+        let parts = displayName.split(separator: " ")
+        guard parts.count == 2,
+              Self.tonics.contains(String(parts[0])),
+              let mode = Mode(rawValue: String(parts[1]))
+        else { return nil }
+        self.init(tonic: String(parts[0]), mode: mode)
+    }
+
+    var displayName: String { "\(tonic) \(mode.rawValue)" }
+    var filenameName: String { "\(tonic)\(mode.filenameSuffix)" }
+}
+
+/// Fresh analyzer output shown as a draft in the label editor until the user saves it.
+struct BeatLabelAnalysis {
+    let bpm: Int
+    let key: BeatKey
 }
 
 /// Stages of the import pipeline, surfaced as a live row above the library.

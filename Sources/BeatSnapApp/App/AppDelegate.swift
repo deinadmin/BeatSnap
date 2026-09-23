@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotKey()
         makePanel()
         observeQueue()
+        observeLibrary()
         // Files can arrive via `application(_:open:)` before this point, so paint once now.
         updateBadge()
         showPanel()
@@ -167,6 +168,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Keep playback consistent even when Finder removes a beat while the panel is closed.
+    private func observeLibrary() {
+        withObservationTracking {
+            _ = library.beats
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if let id = self.preview.pendingBeatID ?? self.preview.activeBeatID,
+                   !self.library.beats.contains(where: { $0.id == id }) {
+                    self.preview.stop()
+                }
+                self.observeLibrary()
+            }
+        }
+    }
+
     private func updateBadge() {
         let count = library.pendingCount
         guard count != badgedCount, let button = statusItem?.button else { return }
@@ -189,7 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Panel
 
     private func makePanel() {
-        let root = RootView(library: library, preview: preview, tools: tools)
+        let root = RootView(
+            library: library,
+            preview: preview,
+            tools: tools,
+            onKeepOnTopChanged: { [weak self] enabled in
+                self?.panel?.setKeepOnTop(enabled)
+            }
+        )
             .environment(library)
             .environment(preview)
         let panel = BeatPanel(content: root)
@@ -226,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPanel() {
         guard let panel else { return }
+        library.refreshFolder()
         checkClipboardForLink()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)

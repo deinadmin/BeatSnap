@@ -10,12 +10,14 @@ final class AudioPreview {
     /// The loaded beat, playing or paused.
     private(set) var activeBeatID: String?
     private(set) var isPlaying = false
+    private(set) var pendingBeatID: String?
     /// Playhead in seconds, preserved across pauses.
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
 
     private var player: AVAudioPlayer?
     private var timer: Timer?
+    private var preparation: Task<Void, Never>?
 
     func isActive(_ beat: Beat) -> Bool { activeBeatID == beat.id }
 
@@ -26,9 +28,37 @@ final class AudioPreview {
         return min(1, max(0, currentTime / duration))
     }
 
-    func toggle(_ beat: Beat) {
+    func toggle(_ beat: Beat, library: BeatLibrary) {
+        if pendingBeatID == beat.id {
+            stop()
+            return
+        }
         guard activeBeatID == beat.id else {
-            start(beat)
+            stop()
+            pendingBeatID = beat.id
+            preparation = Task { [weak self] in
+                do {
+                    let url = try await library.availableURL(for: beat)
+                    try Task.checkCancellation()
+                    // Preparing can take time even after the file is local. Keep the pending
+                    // state published and do this work off the UI actor so animations continue.
+                    let player = try await Task.detached(priority: .userInitiated) {
+                        let player = try AVAudioPlayer(contentsOf: url)
+                        guard player.prepareToPlay() else { throw CocoaError(.fileReadCorruptFile) }
+                        return player
+                    }.value
+                    try Task.checkCancellation()
+                    guard let self, self.pendingBeatID == beat.id,
+                          library.beats.contains(where: { $0.id == beat.id }) else { return }
+                    self.preparation = nil
+                    try self.start(beat, player: player)
+                } catch {
+                    guard !Task.isCancelled, self?.pendingBeatID == beat.id else { return }
+                    self?.pendingBeatID = nil
+                    self?.preparation = nil
+                    library.errorMessage = "Could not play \(beat.title): \(error.localizedDescription)"
+                }
+            }
             return
         }
         if isPlaying { pause() } else { resume() }
@@ -43,6 +73,9 @@ final class AudioPreview {
     }
 
     func stop() {
+        preparation?.cancel()
+        preparation = nil
+        pendingBeatID = nil
         stopTimer()
         player?.stop()
         player = nil
@@ -54,19 +87,18 @@ final class AudioPreview {
 
     /// Stop if the beat that is loaded was removed.
     func stopIfPlaying(_ beat: Beat) {
-        if activeBeatID == beat.id { stop() }
+        if activeBeatID == beat.id || pendingBeatID == beat.id { stop() }
     }
 
-    private func start(_ beat: Beat) {
-        stop()
-        guard let player = try? AVAudioPlayer(contentsOf: beat.fileURL) else { return }
+    private func start(_ beat: Beat, player: AVAudioPlayer) throws {
+        guard player.play() else { throw CocoaError(.fileReadCorruptFile) }
         self.player = player
-        player.prepareToPlay()
-        player.play()
         activeBeatID = beat.id
         duration = player.duration
         currentTime = 0
         isPlaying = true
+        // Publish the active player before ending preparation: there is never an idle gap.
+        pendingBeatID = nil
         startTimer()
     }
 

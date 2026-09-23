@@ -17,5 +17,6 @@ let package = Package(
             dependencies: ["BeatSnapAnalysis"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(name: "BeatSnapAppTests", dependencies: ["BeatSnapApp"]),
     ]
 )

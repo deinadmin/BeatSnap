@@ -1,7 +1,6 @@
 import Foundation
 
-/// Persistence for the beat library: WAVs live in the chosen download folder, their
-/// metadata in `<Application Support>/BeatSnap/beats.json`.
+/// Locations and filename conventions for the folder-backed beat library.
 struct BeatStore {
     static let shared = BeatStore()
 
@@ -9,10 +8,8 @@ struct BeatStore {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let directory = base.appendingPathComponent("BeatSnap", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
+        return directory.resolvingSymlinksInPath().standardizedFileURL
     }
-
-    var indexURL: URL { supportDirectory.appendingPathComponent("beats.json") }
 
     var defaultBeatsDirectory: URL {
         supportDirectory.appendingPathComponent("beats", isDirectory: true)
@@ -22,21 +19,7 @@ struct BeatStore {
     func beatsDirectory() -> URL {
         let directory = AppSettings.shared.downloadDirectory ?? defaultBeatsDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
-    }
-
-    func load() -> [Beat] {
-        guard let data = try? Data(contentsOf: indexURL),
-              let beats = try? JSONDecoder().decode([Beat].self, from: data)
-        else { return [] }
-        return beats.sorted { $0.createdAt > $1.createdAt }
-    }
-
-    func save(_ beats: [Beat]) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(beats) else { return }
-        try? data.write(to: indexURL, options: .atomic)
+        return directory.resolvingSymlinksInPath().standardizedFileURL
     }
 
     /// Whether `url` already sits directly in the beats folder, in which case an import can
@@ -92,6 +75,8 @@ final class AppSettings {
         static let downloadDirectory = "downloadDirectoryBookmark"
         static let downloadDirectoryPath = "downloadDirectoryPath"
         static let lastToolUpdateCheck = "lastToolUpdateCheck"
+        static let analysisAlgorithm = "analysisAlgorithm"
+        static let keepBeatSnapOnTop = "keepBeatSnapOnTop"
     }
 
     /// nil means "use the default folder".
@@ -110,5 +95,26 @@ final class AppSettings {
     var lastToolUpdateCheck: Date? {
         get { UserDefaults.standard.object(forKey: Keys.lastToolUpdateCheck) as? Date }
         set { UserDefaults.standard.set(newValue, forKey: Keys.lastToolUpdateCheck) }
+    }
+
+    var keepBeatSnapOnTop: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.keepBeatSnapOnTop) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.keepBeatSnapOnTop) }
+    }
+
+    /// The preferred analyzer for newly queued work. Apple is the default wherever the
+    /// framework exists; older macOS releases continue with BeatSnap's original DSP.
+    var analysisAlgorithm: AnalysisAlgorithm {
+        get {
+            if let rawValue = UserDefaults.standard.string(forKey: Keys.analysisAlgorithm),
+               let stored = AnalysisAlgorithm(rawValue: rawValue) {
+                return stored
+            }
+            if #available(macOS 27.0, *) { return .musicUnderstanding }
+            return .beatSnapDSP
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Keys.analysisAlgorithm)
+        }
     }
 }

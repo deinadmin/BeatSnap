@@ -10,6 +10,22 @@ public struct AnalysisResult: Sendable {
     public let keyStrength: Double
     /// Seconds of audio actually analysed.
     public let analyzedSeconds: Double
+
+    public init(
+        bpm: Int,
+        key: String,
+        keyShort: String,
+        tempoConfidence: Double,
+        keyStrength: Double,
+        analyzedSeconds: Double
+    ) {
+        self.bpm = bpm
+        self.key = key
+        self.keyShort = keyShort
+        self.tempoConfidence = tempoConfidence
+        self.keyStrength = keyStrength
+        self.analyzedSeconds = analyzedSeconds
+    }
 }
 
 /// On-device BPM + musical key analysis. Decodes with AVFoundation and runs entirely

@@ -1,15 +1,21 @@
 import AppKit
 import SwiftUI
 
-/// The "about" card: app identity, the versions of the tools BeatSnap drives, and the
-/// yt-dlp update it can pull down.
+/// Settings and app information: analyzer preference, tool versions, and yt-dlp updates.
 ///
 /// Deliberately an overlay inside the panel rather than a second window — the app is an
 /// accessory with a floating panel, so an extra window would need its own level and
 /// activation handling to stay reachable over a DAW.
 struct InfoCard: View {
+    private static let cardWidth: CGFloat = 296
+    private static let sectionInset: CGFloat = 16
+
     let tools: ToolStatus
+    let onKeepOnTopChanged: (Bool) -> Void
     let dismiss: () -> Void
+
+    @State private var keepBeatSnapOnTop = AppSettings.shared.keepBeatSnapOnTop
+    @State private var analysisAlgorithm = AppSettings.shared.analysisAlgorithm
 
     var body: some View {
         ZStack {
@@ -29,28 +35,90 @@ struct InfoCard: View {
         VStack(spacing: 0) {
             identity
             Divider().opacity(0.6)
+            analyzerSettings
+            Divider().opacity(0.6)
             versions
             Divider().opacity(0.6)
             updater
         }
-        .frame(width: 296)
+        .frame(width: Self.cardWidth)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .overlay(alignment: .topTrailing) { closeButton }
         .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
+    }
+
+    // MARK: - Analyzer settings
+
+    private var analyzerSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Keep window on top")
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer(minLength: 8)
+                Toggle("Keep window on top", isOn: $keepBeatSnapOnTop)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .fixedSize()
+            }
+            .onChange(of: keepBeatSnapOnTop) { _, enabled in
+                AppSettings.shared.keepBeatSnapOnTop = enabled
+                onKeepOnTopChanged(enabled)
+            }
+
+            analyzerPicker
+
+            Text(analyzerDescription)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, Self.sectionInset)
+        .padding(.vertical, 14)
+    }
+
+    private var analyzerPicker: some View {
+        HStack {
+            Text("Algorithm")
+                .font(.system(size: 12.5, weight: .medium))
+            Spacer(minLength: 8)
+            Picker("Algorithm", selection: $analysisAlgorithm) {
+                ForEach(AnalysisAlgorithm.allCases) { algorithm in
+                    Text(algorithm.label).tag(algorithm)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.regular)
+            .fixedSize()
+            .onChange(of: analysisAlgorithm) { _, newValue in
+                AppSettings.shared.analysisAlgorithm = newValue
+            }
+        }
+    }
+
+    private var analyzerDescription: String {
+        switch analysisAlgorithm {
+        case .musicUnderstanding:
+            if #available(macOS 27.0, *) {
+                return "Uses Apple's on-device Music Understanding framework. BeatSnap Legacy runs automatically if analysis fails."
+            }
+            return "Requires macOS 27. BeatSnap Legacy runs automatically on this Mac."
+        case .beatSnapDSP:
+            return "Uses BeatSnap's original on-device tempo and key detection algorithms."
+        }
     }
 
     // MARK: - Identity
 
     private var identity: some View {
         VStack(spacing: 5) {
-            if let icon = NSApp.applicationIconImage {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 60, height: 60)
-                    .padding(.bottom, 2)
-            }
-            Text("Beat Snap")
-                .font(.system(size: 15, weight: .bold))
+            Image(systemName: "music.note")
+                .font(.system(size: 40, weight: .regular))
+                .frame(width: 60, height: 60)
+                .padding(.bottom, 2)
+            Text("\(Text("BeatSnap").bold()) by Carlo")
+                .font(.system(size: 15))
             Text(Self.appVersion)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
@@ -75,7 +143,7 @@ struct InfoCard: View {
     // MARK: - Tool versions
 
     private var versions: some View {
-        VStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
             ToolVersionRow(
                 name: "yt-dlp", version: tools.ytDlpVersion, isLoading: !tools.hasReadVersions
             )
@@ -108,13 +176,16 @@ struct InfoCard: View {
                     .foregroundStyle(isFailure ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 AccentButton(
                     title: tools.phase.isBusy ? "Checking…" : "Check for Updates",
                     isBusy: tools.phase.isBusy,
                     isEnabled: !tools.phase.isBusy,
                     action: check
                 )
+                // The status is allowed to wrap; the action label must remain complete.
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
             }
         }
         .padding(.horizontal, 16)

@@ -133,6 +133,12 @@ PLIST
 # ---------------------------------------------------------------- sign
 
 say "Ad-hoc signing"
+# Files copied from Finder-managed/downloaded locations can carry resource forks,
+# FinderInfo, quarantine or provenance metadata. codesign rejects bundles containing
+# those extended attributes, so strip them from the freshly assembled copy only. The
+# cached source tools stay untouched.
+xattr -cr "$APP"
+
 # Nested tools first, then the bundle. The Python runtime loads its own .so files, so it
 # needs library validation disabled to run under a signed parent.
 ENTITLEMENTS="$(mktemp -t beatsnap-ents).plist"

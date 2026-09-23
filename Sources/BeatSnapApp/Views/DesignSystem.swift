@@ -108,3 +108,24 @@ struct AccentButton: View {
         .disabled(!isEnabled)
     }
 }
+
+struct TwoToneSpinner: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var rotating = false
+    var label = "Downloading"
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(Design.bpmTint.opacity(0.22), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: 0.28)
+                .stroke(Design.bpmTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(rotating && !reduceMotion ? 270 : -90))
+                .animation(reduceMotion ? nil : .linear(duration: 0.85).repeatForever(autoreverses: false),
+                           value: rotating)
+        }
+        .frame(width: 15, height: 15)
+        .onAppear { rotating = true }
+        .accessibilityLabel(label)
+    }
+}

@@ -4,6 +4,7 @@ struct RootView: View {
     @Bindable var library: BeatLibrary
     let preview: AudioPreview
     let tools: ToolStatus
+    let onKeepOnTopChanged: (Bool) -> Void
 
     @FocusState private var urlFieldFocused: Bool
     @State private var showingInfo = false
@@ -18,7 +19,9 @@ struct RootView: View {
             }
 
             if showingInfo {
-                InfoCard(tools: tools) { showingInfo = false }
+                InfoCard(tools: tools, onKeepOnTopChanged: onKeepOnTopChanged) {
+                    showingInfo = false
+                }
             }
 
             // Above the info card: a drag is in progress, so its feedback wins.
@@ -55,15 +58,15 @@ struct RootView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Beat Snap")
-                    .font(.system(size: 15, weight: .bold))
+                Text("\(Text("BeatSnap").bold()) by Carlo")
+                    .font(.system(size: 15))
                 Text(library.subtitle)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             HStack(spacing: 6) {
-                CircleIconButton(systemName: "info", help: "About Beat Snap") {
+                CircleIconButton(systemName: "info", help: "BeatSnap by Carlo settings and info") {
                     showingInfo.toggle()
                 }
                 CircleIconButton(systemName: "folder", help: "Open beats folder") {
@@ -135,7 +138,9 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
-        if library.beats.isEmpty && library.queue.isEmpty {
+        if library.isLoadingFolder && library.queue.isEmpty {
+            FolderLoadingView()
+        } else if library.beats.isEmpty && library.queue.isEmpty {
             EmptyLibraryView()
         } else {
             ScrollView {
@@ -144,6 +149,9 @@ struct RootView: View {
                     // top-to-bottom in the order it will be worked through.
                     ForEach(library.queue) { item in
                         QueueRow(item: item)
+                    }
+                    if library.isLoadingFolder {
+                        FolderLoadingView()
                     }
                     ForEach(library.beats) { beat in
                         BeatRowView(beat: beat)
@@ -154,6 +162,21 @@ struct RootView: View {
             }
             .scrollContentBackground(.hidden)
         }
+    }
+}
+
+private struct FolderLoadingView: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            TwoToneSpinner(label: "Scanning beats folder")
+                .accessibilityHidden(true)
+            Text("Scanning beats folder…")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -282,27 +305,45 @@ private struct StageTile: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.tertiary)
             } else if let progress = stage.progress {
-                // Hand-drawn ring rather than a determinate ProgressView, matching the
-                // playback ring on a finished beat's tile.
-                Circle()
+                // The progress follows the tile itself so it stays consistent with the
+                // rounded-rectangle music-note tile shown once the beat is ready.
+                RoundedRectangle(cornerRadius: Design.rowCorner - 1)
                     .stroke(.primary.opacity(0.12), lineWidth: 2)
-                    .padding(3)
-                Circle()
-                    .trim(from: 0, to: max(0.02, progress))
+                    .padding(1)
+                RoundedRectangle(cornerRadius: Design.rowCorner - 1)
+                    .trim(from: 0, to: min(1, max(0.02, progress)))
                     .stroke(Design.bpmTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .padding(3)
+                    .padding(1)
                     .animation(.easeOut(duration: 0.2), value: progress)
                 Image(systemName: "arrow.down")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
             } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.8)
+                IndeterminateTileBorder()
+                Image(systemName: "waveform")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(width: Design.tileSize, height: Design.tileSize)
+    }
+}
+
+private struct IndeterminateTileBorder: View {
+    @State private var rotation = 0.0
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: Design.rowCorner - 1)
+            .trim(from: 0, to: 0.28)
+            .stroke(Design.bpmTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .rotationEffect(.degrees(rotation))
+            .padding(1)
+        .onAppear {
+            withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+        }
     }
 }
 

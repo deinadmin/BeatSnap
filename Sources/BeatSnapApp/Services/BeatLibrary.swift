@@ -12,9 +12,12 @@ import Observation
 @Observable
 final class BeatLibrary {
     private(set) var beats: [Beat] = []
+    /// Initial scan of the selected folder; background refreshes keep the list visible.
+    private(set) var isLoadingFolder = true
     /// Pending, in-flight and failed items, oldest first.
     private(set) var queue: [QueueItem] = []
     var errorMessage: String?
+    let downloads = CloudDownloads()
 
     /// URL waiting on a "this video is long" confirmation.
     var pendingLongVideo: (url: String, info: VideoInfo)?
@@ -28,16 +31,87 @@ final class BeatLibrary {
     var pendingCount: Int { queue.filter { !$0.stage.isFailed }.count }
 
     private let store = BeatStore.shared
-    private let analyzer = BeatAnalyzer()
+    private let analyzer = AppAudioAnalyzer()
     /// The single drain task, non-nil while the queue is being worked through.
     private var worker: Task<Void, Never>?
 
+    @ObservationIgnored private var folderTimer: Timer?
+    @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanRevision = UUID()
+    @ObservationIgnored private var folderEntries: [String: BeatFolderScanner.Entry] = [:]
+    @ObservationIgnored private var displayedDirectory: URL?
+    @ObservationIgnored private let folderMonitor = BeatFolderMonitor()
+
     init() {
-        beats = store.load()
+        folderMonitor.onChange = { [weak self] in self?.refreshFolder() }
+        refreshFolder()
+        // A safety net for disconnected volumes, cloud providers, and in-place file writes
+        // that do not change directory entries. Normal additions/removals use notifications.
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.scanTask == nil else { return }
+                self.refreshFolder()
+            }
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        folderTimer = timer
+    }
+
+    deinit {
+        folderTimer?.invalidate()
+        scanTask?.cancel()
+    }
+
+    /// Scan away from the UI actor. A newer refresh supersedes an older result, including
+    /// scans started before an import, rename, deletion, or change of selected folder.
+    func refreshFolder() {
+        scanTask?.cancel()
+        let revision = UUID()
+        scanRevision = revision
+        let directory = store.beatsDirectory().standardizedFileURL
+        folderMonitor.watch(directory)
+        if displayedDirectory != directory {
+            isLoadingFolder = true
+            beats = []
+            folderEntries = [:]
+            displayedDirectory = directory
+        }
+        let cached = folderEntries
+        let known = beats
+        scanTask = Task { [weak self] in
+            let scan = Task.detached(priority: .utility) {
+                Result { try BeatFolderScanner.scan(directory: directory, cached: cached, known: known) }
+            }
+            let result = await withTaskCancellationHandler {
+                await scan.value
+            } onCancel: {
+                scan.cancel()
+            }
+            guard let self, !Task.isCancelled, self.scanRevision == revision else { return }
+            self.scanTask = nil
+            defer { self.isLoadingFolder = false }
+            switch result {
+            case .success(let entries):
+                self.folderEntries = entries
+                var current: [Beat] = entries.values.map { $0.beat }
+                current.sort { (left: Beat, right: Beat) -> Bool in
+                    if left.createdAt == right.createdAt { return left.filePath < right.filePath }
+                    return left.createdAt > right.createdAt
+                }
+                if self.beats != current { self.beats = current }
+                self.downloads.reconcile(current)
+            case .failure(let error):
+                self.folderEntries = [:]
+                self.beats = []
+                self.errorMessage = "Could not read the beats folder: \(error.localizedDescription)"
+            }
+        }
     }
 
     var subtitle: String {
         if pendingCount > 0 { return "\(pendingCount) in queue" }
+        if isLoadingFolder { return "Scanning beats folder…" }
         if beats.isEmpty { return "Paste a link or drop a file" }
         return "\(beats.count) beat\(beats.count == 1 ? "" : "s")"
     }
@@ -108,7 +182,9 @@ final class BeatLibrary {
     }
 
     private func isKnown(fileURL url: URL) -> Bool {
-        beats.contains { $0.filePath == url.path } || queue.contains { $0.fileURL == url }
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        return beats.contains { $0.filePath == path }
+            || queue.contains { $0.fileURL?.resolvingSymlinksInPath().standardizedFileURL.path == path }
     }
 
     private func duplicateMessage(videoID: String) -> String? {
@@ -251,24 +327,111 @@ final class BeatLibrary {
     }
 
     private func record(_ beat: Beat) {
-        beats.insert(beat, at: 0)
-        store.save(beats)
+        if store.isInBeatsDirectory(beat.fileURL) {
+            beats.removeAll { $0.filePath == beat.filePath }
+            beats.insert(beat, at: 0)
+        }
+        refreshFolder()
     }
 
-    /// Analysis is CPU-bound; keep it off the main actor.
+    /// The preference is captured when analysis starts. Apple's analyzer manages its own
+    /// asynchronous work; the custom DSP path moves its CPU work off the main actor.
     private func analyze(url: URL) async throws -> AnalysisResult {
         let analyzer = self.analyzer
-        return try await Task.detached(priority: .userInitiated) {
-            try analyzer.analyze(url: url)
-        }.value
+        let algorithm = AppSettings.shared.analysisAlgorithm
+        return try await analyzer.analyze(url: url, preferred: algorithm)
     }
 
     // MARK: - Library actions
 
+    func availableURL(for beat: Beat) async throws -> URL {
+        do {
+            let url = try await downloads.availableURL(for: beat)
+            if let index = beats.firstIndex(where: { $0.id == beat.id }) {
+                beats[index].needsDownload = false
+            }
+            refreshFolder()
+            return url
+        } catch {
+            if !(error is CancellationError) {
+                errorMessage = "Could not download \(beat.title): \(error.localizedDescription)"
+            }
+            throw error
+        }
+    }
+
+    /// Run the selected analyzer again without changing the file or library metadata.
+    /// The result remains a draft in the editor until the user explicitly saves it.
+    func reanalyzeLabels(for beat: Beat) async throws -> BeatLabelAnalysis {
+        guard let current = beats.first(where: { $0.id == beat.id }) else {
+            throw LabelUpdateError.beatNotFound
+        }
+        let url = try await availableURL(for: current)
+        try Task.checkCancellation()
+        let result = try await analyze(url: url)
+        guard let key = BeatKey(displayName: result.key) else {
+            throw LabelUpdateError.unsupportedKey(result.key)
+        }
+        return BeatLabelAnalysis(bpm: result.bpm, key: key)
+    }
+
+    /// Correct the labels attached to an analyzed beat. This only renames the file and
+    /// refreshes the folder listing; no audio samples are decoded or changed.
+    func updateLabels(for beat: Beat, bpm: Int, key: BeatKey) throws {
+        guard (1...999).contains(bpm) else {
+            throw LabelUpdateError.invalidBPM
+        }
+        guard let index = beats.firstIndex(where: { $0.id == beat.id }) else {
+            throw LabelUpdateError.beatNotFound
+        }
+
+        let current = beats[index]
+        let oldURL = current.fileURL
+        guard FileManager.default.fileExists(atPath: oldURL.path) else {
+            throw LabelUpdateError.fileMissing
+        }
+
+        let ext = oldURL.pathExtension.isEmpty ? "wav" : oldURL.pathExtension
+        let baseName = "\(BeatStore.sanitize(filename: current.title)) [\(bpm)BPM \(key.filenameName)]"
+        let exactURL = oldURL.deletingLastPathComponent()
+            .appendingPathComponent("\(baseName).\(ext)")
+        let newURL = oldURL.standardizedFileURL == exactURL.standardizedFileURL
+            ? oldURL
+            : BeatStore.uniqueURL(
+                in: oldURL.deletingLastPathComponent(),
+                baseName: baseName,
+                extension: ext
+            )
+
+        let didRename = newURL != oldURL
+        if didRename {
+            do {
+                try FileManager.default.moveItem(at: oldURL, to: newURL)
+            } catch {
+                throw LabelUpdateError.renameFailed(error)
+            }
+        }
+
+        var updated = current
+        updated.bpm = bpm
+        updated.key = key.displayName
+        updated.fileName = newURL.lastPathComponent
+        updated.filePath = newURL.path
+
+        beats[index] = updated
+        refreshFolder()
+    }
+
     func delete(_ beat: Beat) {
-        try? FileManager.default.removeItem(at: beat.fileURL)
-        beats.removeAll { $0.id == beat.id }
-        store.save(beats)
+        Task {
+            do {
+                try await CloudFileAccess.delete(beat.fileURL)
+                beats.removeAll { $0.id == beat.id }
+            } catch {
+                errorMessage = "Could not delete the beat: \(error.localizedDescription)"
+            }
+            refreshFolder()
+        }
     }
 
     func revealInFinder(_ beat: Beat) {
@@ -290,15 +453,17 @@ final class BeatLibrary {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Choose where downloaded beats are saved"
+        panel.message = "Choose the beats folder to display and save new beats in"
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url {
             AppSettings.shared.downloadDirectory = url
+            refreshFolder()
         }
     }
 
     func resetDownloadFolder() {
         AppSettings.shared.downloadDirectory = nil
+        refreshFolder()
     }
 
     var downloadFolderPath: String {
@@ -307,5 +472,28 @@ final class BeatLibrary {
 
     var usingCustomFolder: Bool {
         AppSettings.shared.downloadDirectory != nil
+    }
+}
+
+private enum LabelUpdateError: LocalizedError {
+    case invalidBPM
+    case beatNotFound
+    case fileMissing
+    case unsupportedKey(String)
+    case renameFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidBPM:
+            "Enter a BPM between 1 and 999."
+        case .beatNotFound:
+            "This beat is no longer in the library."
+        case .fileMissing:
+            "The audio file could not be found."
+        case .unsupportedKey(let key):
+            "The analyzer returned an unsupported key: \(key)."
+        case .renameFailed(let error):
+            "The audio file could not be renamed: \(error.localizedDescription)"
+        }
     }
 }

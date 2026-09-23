@@ -43,8 +43,7 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
 
         // Float above ordinary windows, stay reachable from every Space, and be allowed
         // over a full-screen app instead of forcing a Space switch.
-        isFloatingPanel = true
-        level = .floating
+        setKeepOnTop(AppSettings.shared.keepBeatSnapOnTop)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         minSize = NSSize(width: 380, height: 420)
@@ -56,12 +55,10 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
 
         // Vibrancy behind the SwiftUI content so the panel reads as a real macOS surface.
         //
-        // Material controls how see-through the panel is. Roughly least to most
-        // translucent: .windowBackground, .contentBackground, .sidebar, .menu, .popover,
-        // .hudWindow, .underWindowBackground. .hudWindow is the most translucent option
-        // that still adapts to light and dark appearance.
+        // Use the standard window material: it keeps the subtle adaptive translucency of a
+        // normal macOS window without letting the desktop or DAW show strongly through it.
         let effect = DropTargetEffectView(dropHandler: dropHandler)
-        effect.material = .hudWindow
+        effect.material = .windowBackground
         effect.blendingMode = .behindWindow
         effect.state = .active
         // Don't let the material darken/solidify when the panel loses focus — it stays
@@ -99,6 +96,11 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         // The window is the last stop in AppKit's dragging-destination search, so this is
         // the backstop for any path where the content view isn't asked.
         registerForDraggedTypes([.fileURL])
+    }
+
+    func setKeepOnTop(_ enabled: Bool) {
+        isFloatingPanel = enabled
+        level = enabled ? .floating : .normal
     }
 
     // MARK: - Dragging destination
