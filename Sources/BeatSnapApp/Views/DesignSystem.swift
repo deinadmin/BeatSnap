@@ -3,7 +3,10 @@ import SwiftUI
 /// Shared colours, metrics and small building blocks for the BeatSnap UI.
 enum Design {
     static let rowCorner: CGFloat = 9
+    // A smaller visible curve on the inset tile keeps the row and window radii intact.
+    static let tileCorner: CGFloat = 6
     static let tileSize: CGFloat = 36
+    static let rowContentHeight: CGFloat = 40
     /// Inset from the window edges for header and download-bar content.
     ///
     /// Chosen to equal the header button's vertical inset: `.buttonStyle(.glass)` grows a

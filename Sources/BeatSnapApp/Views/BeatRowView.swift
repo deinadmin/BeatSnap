@@ -51,6 +51,7 @@ struct BeatRowView: View {
                     .transition(.opacity)
                 }
             }
+            .frame(minHeight: Design.rowContentHeight)
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
 
@@ -210,7 +211,7 @@ private struct DragPreview: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 11) {
-                RoundedRectangle(cornerRadius: Design.rowCorner)
+                RoundedRectangle(cornerRadius: Design.tileCorner)
                     .fill(.quaternary.opacity(0.55))
                     .overlay {
                         Image(systemName: preview.isPlaying(beat) ? "pause.fill" : "music.note")
@@ -253,6 +254,7 @@ private struct DragPreview: View {
                     }
                 }
             }
+            .frame(minHeight: Design.rowContentHeight)
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
 
@@ -347,7 +349,7 @@ private struct PreviewTile: View {
 
     var body: some View {
         Button(action: action) {
-            RoundedRectangle(cornerRadius: Design.rowCorner)
+            RoundedRectangle(cornerRadius: Design.tileCorner)
                 .fill(.quaternary.opacity(0.55))
                 .overlay {
                     ZStack {

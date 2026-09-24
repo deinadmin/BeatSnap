@@ -277,6 +277,7 @@ private struct QueueRow: View {
                 .transition(.opacity)
             }
         }
+        .frame(minHeight: Design.rowContentHeight)
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
         // Waiting rows recede so the one being worked on reads as the active row.
@@ -298,7 +299,7 @@ private struct StageTile: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: Design.rowCorner)
+            RoundedRectangle(cornerRadius: Design.tileCorner)
                 .fill(.quaternary.opacity(0.55))
 
             if stage.isFailed {
@@ -312,10 +313,10 @@ private struct StageTile: View {
             } else if let progress = stage.progress {
                 // The progress follows the tile itself so it stays consistent with the
                 // rounded-rectangle music-note tile shown once the beat is ready.
-                RoundedRectangle(cornerRadius: Design.rowCorner - 1)
+                RoundedRectangle(cornerRadius: Design.tileCorner - 1)
                     .stroke(.primary.opacity(0.12), lineWidth: 2)
                     .padding(1)
-                RoundedRectangle(cornerRadius: Design.rowCorner - 1)
+                RoundedRectangle(cornerRadius: Design.tileCorner - 1)
                     .trim(from: 0, to: min(1, max(0.02, progress)))
                     .stroke(Design.bpmTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
