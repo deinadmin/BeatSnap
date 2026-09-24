@@ -20,7 +20,6 @@ struct BeatLabelEditor: View {
     @State private var bpmText: String
     @State private var tonic: String
     @State private var mode: BeatKey.Mode
-    @State private var errorMessage: String?
     @State private var isAnalyzing = false
     @FocusState private var bpmFocused: Bool
 
@@ -55,10 +54,6 @@ struct BeatLabelEditor: View {
             header
             if scope != .key { bpmEditor.disabled(isAnalyzing) }
             if scope != .bpm { keyEditor.disabled(isAnalyzing) }
-
-            if let errorMessage {
-                LabelEditorError(message: errorMessage)
-            }
 
             footer
         }
@@ -105,7 +100,6 @@ struct BeatLabelEditor: View {
                         .onChange(of: bpmText) { _, newValue in
                             let digits = String(newValue.filter(\.isNumber).prefix(3))
                             if digits != newValue { bpmText = digits }
-                            errorMessage = nil
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)
@@ -238,13 +232,11 @@ struct BeatLabelEditor: View {
     private func nudgeBPM(by amount: Int) {
         let current = bpm ?? beat.bpm
         bpmText = String(min(999, max(1, current + amount)))
-        errorMessage = nil
     }
 
     private func scaleBPM(by ratio: Double) {
         let current = bpm ?? beat.bpm
         bpmText = String(min(999, max(1, Int((Double(current) * ratio).rounded()))))
-        errorMessage = nil
     }
 
     private func save() {
@@ -264,7 +256,7 @@ struct BeatLabelEditor: View {
             try library.updateLabels(for: beat, bpm: savedBPM, key: savedKey)
             dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            library.toasts.report(error, title: "Could not update tags")
         }
     }
 
@@ -272,7 +264,6 @@ struct BeatLabelEditor: View {
     private func analyzeBeat() async {
         guard !isAnalyzing else { return }
         bpmFocused = false
-        errorMessage = nil
         isAnalyzing = true
         defer { isAnalyzing = false }
 
@@ -287,7 +278,7 @@ struct BeatLabelEditor: View {
         } catch is CancellationError {
             return
         } catch {
-            errorMessage = error.localizedDescription
+            library.toasts.report(error, title: "Could not analyze the beat")
         }
     }
 }
@@ -324,16 +315,5 @@ private struct RatioButton: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
         .controlSize(.mini)
-    }
-}
-
-private struct LabelEditorError: View {
-    let message: String
-
-    var body: some View {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(size: 10.5))
-            .foregroundStyle(.red)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }

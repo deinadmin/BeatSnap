@@ -12,6 +12,7 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
 
     /// Audio-file drops. Wired to the library by `AppDelegate`.
     let dropHandler = AudioDropHandler()
+    let pasteHandler = AudioPasteHandler()
 
     convenience init(content: some View) {
         self.init(
@@ -101,6 +102,15 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
     func setKeepOnTop(_ enabled: Bool) {
         isFloatingPanel = enabled
         level = enabled ? .floating : .normal
+    }
+
+    /// Handle Finder files before a focused SwiftUI text field can paste their names.
+    /// Text and URL pastes continue through the normal responder chain.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isKeyWindow, AudioPasteHandler.isPasteShortcut(event), pasteHandler.paste(from: .general) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     // MARK: - Dragging destination

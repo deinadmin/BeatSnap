@@ -16,7 +16,7 @@ final class BeatLibrary {
     private(set) var isLoadingFolder = true
     /// Pending, in-flight and failed items, oldest first.
     private(set) var queue: [QueueItem] = []
-    var errorMessage: String?
+    let toasts = ToastCenter()
     let downloads = CloudDownloads()
 
     /// URL waiting on a "this video is long" confirmation.
@@ -104,7 +104,7 @@ final class BeatLibrary {
             case .failure(let error):
                 self.folderEntries = [:]
                 self.beats = []
-                self.errorMessage = "Could not read the beats folder: \(error.localizedDescription)"
+                self.toasts.report(error, title: "Could not read the beats folder")
             }
         }
     }
@@ -125,14 +125,26 @@ final class BeatLibrary {
         let link = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !link.isEmpty, !isCheckingLink else { return }
 
-        errorMessage = nil
         isCheckingLink = true
         defer { isCheckingLink = false }
 
         do {
+            let source = try DownloadLink(link)
+            if source.kind != .youtube {
+                if queue.contains(where: {
+                    if case .remote(let queued) = $0.source { return queued.downloadURL == source.downloadURL }
+                    return false
+                }) {
+                    toasts.show(.error, title: "Already queued", message: "That link is already in the download queue.")
+                    return
+                }
+                urlText = ""
+                enqueue(QueueItem(title: source.title, source: .remote(source)))
+                return
+            }
             let info = try await YouTubeDownloader.fetchInfo(url: link)
             if let duplicate = duplicateMessage(videoID: info.id) {
-                errorMessage = duplicate
+                toasts.show(.error, title: "Already added", message: duplicate)
                 return
             }
             // Long videos are usually full mixes, not beats — confirm first.
@@ -143,7 +155,7 @@ final class BeatLibrary {
             urlText = ""
             enqueue(QueueItem(title: info.title, source: .youtube(url: link, info: info)))
         } catch {
-            errorMessage = error.localizedDescription
+            toasts.report(error, title: "Could not add the link")
         }
     }
 
@@ -156,7 +168,6 @@ final class BeatLibrary {
 
     /// Queue audio files dropped onto the panel, in the order they were dropped.
     func importDroppedFiles(_ urls: [URL]) {
-        errorMessage = nil
         var duplicates = 0
         for url in urls {
             // Re-dropping a beat that's already indexed (straight out of the beats folder)
@@ -170,9 +181,10 @@ final class BeatLibrary {
             )
         }
         if duplicates > 0 {
-            errorMessage = duplicates == 1
+            let message = duplicates == 1
                 ? "That file is already in your library."
                 : "\(duplicates) of those files are already in your library."
+            toasts.show(.error, title: "Already added", message: message)
         }
     }
 
@@ -217,6 +229,7 @@ final class BeatLibrary {
         while let next = queue.first(where: { !$0.stage.isFailed }) {
             switch next.source {
             case .youtube(let url, let info): await download(next.id, url: url, info: info)
+            case .remote(let link): await downloadFile(next.id, link: link)
             case .file(let url): await importFile(next.id, url: url)
             }
             if let index = queue.firstIndex(where: { $0.id == next.id }), !queue[index].stage.isFailed {
@@ -231,6 +244,25 @@ final class BeatLibrary {
     private func setStage(_ stage: QueueStage, for id: QueueItem.ID) {
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].stage = stage
+        if case .failed(let reason) = stage {
+            toasts.show(.error, title: "Could not add \(queue[index].title)", message: reason)
+        }
+    }
+
+    private func downloadFile(_ id: QueueItem.ID, link: DownloadLink) async {
+        setStage(.downloading(progress: nil), for: id)
+        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("BeatSnap-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        do {
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let file = try await RemoteAudioDownloader.download(link, into: staging)
+            if let index = queue.firstIndex(where: { $0.id == id }) {
+                queue[index].title = BeatStore.stripAnalysisTag(from: file.deletingPathExtension().lastPathComponent)
+            }
+            await importFile(id, url: file)
+        } catch {
+            setStage(.failed(error.localizedDescription), for: id)
+        }
     }
 
     private func download(_ id: QueueItem.ID, url: String, info: VideoInfo) async {
@@ -353,10 +385,7 @@ final class BeatLibrary {
             refreshFolder()
             return url
         } catch {
-            if !(error is CancellationError) {
-                errorMessage = "Could not download \(beat.title): \(error.localizedDescription)"
-            }
-            throw error
+            throw toasts.report(error, title: "Could not download \(beat.title)")
         }
     }
 
@@ -420,6 +449,7 @@ final class BeatLibrary {
 
         beats[index] = updated
         refreshFolder()
+        toasts.show(.success, title: "Tags updated", message: "\(current.title) · \(bpm) BPM · \(key.displayName)")
     }
 
     func delete(_ beat: Beat) {
@@ -427,8 +457,9 @@ final class BeatLibrary {
             do {
                 try await CloudFileAccess.delete(beat.fileURL)
                 beats.removeAll { $0.id == beat.id }
+                toasts.show(.info, title: "Beat deleted", message: beat.title)
             } catch {
-                errorMessage = "Could not delete the beat: \(error.localizedDescription)"
+                toasts.report(error, title: "Could not delete \(beat.title)")
             }
             refreshFolder()
         }

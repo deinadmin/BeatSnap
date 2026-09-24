@@ -32,11 +32,20 @@ final class ToolStatus {
     /// False until the first read finishes, so a nil version can be told apart from a tool
     /// that failed to run.
     private(set) var hasReadVersions = false
-    private(set) var phase: Phase = .idle
+    private(set) var phase: Phase = .idle {
+        didSet {
+            if case .failed(let message) = phase {
+                toasts.show(.error, title: "Could not update yt-dlp", message: message)
+            }
+        }
+    }
     /// Mirrors the persisted timestamp; kept here because `AppSettings` isn't observable.
     private(set) var lastChecked: Date?
 
-    init() {
+    private let toasts: ToastCenter
+
+    init(toasts: ToastCenter) {
+        self.toasts = toasts
         lastChecked = AppSettings.shared.lastToolUpdateCheck
     }
 

@@ -1,6 +1,7 @@
 # BeatSnap
 
-A native macOS menubar app: paste a YouTube link (or drop a local audio file), get the audio
+A native macOS menubar app: paste a YouTube, direct audio, Google Drive, or Dropbox file link
+(or drop a local audio file), get the audio
 as a file in the beats folder, detect BPM and musical key on-device, and drag the result
 straight into a DAW.
 
@@ -65,7 +66,24 @@ errors, key 13/16 exact (15/16 including relative/fifth neighbours).
   " [140BPM F#min]" (and the " (2)" `uniqueURL` may have appended right after it) so re-analysing
   gives one tag, not two — but it deliberately won't touch titles that merely *look* tagged,
   like "…(MZLE) (2021)" or "Elfbaraddict612-2tone(148Bpm)".
-- **All work goes through one serial queue.** `BeatLibrary.queue` holds YouTube links and
+- **File links retain their original encoding.** `DownloadLink` routes YouTube to yt-dlp
+  and public direct/Drive/Dropbox files to `RemoteAudioDownloader`. Remote files are staged
+  outside the beats folder, validated with Core Audio, and imported through the local-file
+  pipeline. Share links need public access and downloads enabled; folders and private
+  account authorization are not supported. Drive confirmation requests are restricted to
+  Google's download endpoints and the original file ID.
+- **Toasts belong to the library.** `ToastCenter` keeps at most three items. Normal dismissal
+  frees its layout space immediately, retains the outgoing surface for its slide/fade, then
+  removes it; capacity eviction removes it
+  immediately and cancels its dismissal task. The view pauses expiry while hovered, while
+  the panel is closed/minimized, or with VoiceOver. Queue failures still keep their receipts.
+  Hide older cards' foreground content before `glassEffect` when collapsed: glass compositing
+  can otherwise expose overlapping text even when the cards use z-index or clipping.
+- **Finder paste is handled before text editing.** `BeatPanel.performKeyEquivalent` and the
+  Edit menu route copied file URLs through `AudioPasteHandler` into the same queue as drops.
+  Only audio URLs are imported, ordinary text keeps native paste behavior, and non-audio file
+  selections show an error instead of inserting their filenames into the URL field.
+- **All work goes through one serial queue.** `BeatLibrary.queue` holds links and
   dropped/opened files alike; a single `Task` (`drain()`) works through it one item at a time
   and is deliberately not tied to the panel, so a closed window keeps analysing. Only one
   worker may exist — `enqueue` starts one solely when `worker == nil`, and `drain` clears it

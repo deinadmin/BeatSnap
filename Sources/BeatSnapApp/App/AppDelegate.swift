@@ -4,10 +4,10 @@ import Observation
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let library = BeatLibrary()
     private let preview = AudioPreview()
-    private let tools = ToolStatus()
+    private lazy var tools = ToolStatus(toasts: library.toasts)
     private var statusItem: NSStatusItem?
     private var panel: BeatPanel?
     private var hotKey: GlobalHotKey?
@@ -80,7 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        let paste = editMenu.addItem(withTitle: "Paste", action: #selector(pasteFromMenu(_:)), keyEquivalent: "v")
+        paste.target = self
         editMenu.addItem(withTitle: "Delete", action: #selector(NSText.delete(_:)), keyEquivalent: "")
         editMenu.addItem(.separator())
         editMenu.addItem(
@@ -89,6 +90,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editItem.submenu = editMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func pasteFromMenu(_ sender: Any?) {
+        if let panel, NSApp.keyWindow === panel, panel.pasteHandler.paste(from: .general) { return }
+        NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: sender)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(pasteFromMenu(_:)) else { return true }
+        return (panel != nil && NSApp.keyWindow === panel && AudioPasteHandler.containsFiles(on: .general))
+            || NSApp.target(forAction: #selector(NSText.paste(_:))) != nil
     }
 
     // MARK: - Menubar
@@ -223,6 +235,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.dropHandler.onDrop = { [weak self] urls in
             self?.library.importDroppedFiles(urls)
         }
+        panel.pasteHandler.onPaste = { [weak self] urls in
+            self?.library.importDroppedFiles(urls)
+        }
+        panel.pasteHandler.onRejectedFiles = { [weak self] in
+            self?.library.toasts.show(.error, title: "No audio files to paste",
+                                     message: "Copy an audio file in Finder, then paste it here.")
+        }
         self.panel = panel
     }
 
@@ -257,14 +276,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: .beatSnapPanelShown, object: nil)
     }
 
-    /// Offer up a YouTube link sitting on the clipboard, unless it's already downloaded.
+    /// Suggest recognizable media links without offering every copied web page.
     private func checkClipboardForLink() {
         guard let text = NSPasteboard.general.string(forType: .string)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-            let id = YouTubeDownloader.youtubeID(from: text)
+            let link = try? DownloadLink(text), link.canSuggestFromClipboard
         else { return }
 
-        guard !library.isKnown(videoID: id), library.urlText.isEmpty else { return }
+        guard library.urlText.isEmpty else { return }
+        if let id = YouTubeDownloader.youtubeID(from: text), library.isKnown(videoID: id) { return }
         library.urlText = text
     }
 }

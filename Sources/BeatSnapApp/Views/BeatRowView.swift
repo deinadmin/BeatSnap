@@ -299,7 +299,8 @@ private struct BeatPreviewControl: View {
 
     var body: some View {
         PreviewTile(isActive: preview.isActive(beat), isPlaying: preview.isPlaying(beat),
-                    needsDownload: beat.needsDownload, isBusy: state.isBusy) {
+                    needsDownload: beat.needsDownload, isBusy: state.isBusy,
+                    isDownloading: state == .downloading) {
             preview.toggle(beat, library: library)
         }
     }
@@ -332,6 +333,7 @@ private struct PreviewTile: View {
     let isPlaying: Bool
     let needsDownload: Bool
     let isBusy: Bool
+    let isDownloading: Bool
     let action: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -350,7 +352,10 @@ private struct PreviewTile: View {
                 .overlay {
                     ZStack {
                         if isBusy {
-                            TwoToneSpinner()
+                            IndeterminateTileBorder()
+                            Image(systemName: isDownloading ? "arrow.down" : "waveform")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.secondary)
                                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
                         } else {
                             Image(systemName: symbol)

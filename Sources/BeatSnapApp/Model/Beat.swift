@@ -114,11 +114,12 @@ enum QueueStage: Equatable {
     }
 }
 
-/// One unit of queued work. A YouTube link and a dropped file differ only in how the audio
+/// One unit of queued work. A link and a dropped file differ only in how the audio
 /// arrives — both end as an analysed file in the beats folder — so they share a queue.
 struct QueueItem: Identifiable, Equatable {
     enum Source: Equatable {
         case youtube(url: String, info: VideoInfo)
+        case remote(DownloadLink)
         case file(URL)
     }
 

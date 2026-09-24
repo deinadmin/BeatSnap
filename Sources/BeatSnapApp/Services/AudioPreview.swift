@@ -56,7 +56,7 @@ final class AudioPreview {
                     guard !Task.isCancelled, self?.pendingBeatID == beat.id else { return }
                     self?.pendingBeatID = nil
                     self?.preparation = nil
-                    library.errorMessage = "Could not play \(beat.title): \(error.localizedDescription)"
+                    library.toasts.report(error, title: "Could not play \(beat.title)")
                 }
             }
             return

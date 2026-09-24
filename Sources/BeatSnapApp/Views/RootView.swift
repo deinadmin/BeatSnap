@@ -7,6 +7,7 @@ struct RootView: View {
     let onKeepOnTopChanged: (Bool) -> Void
 
     @FocusState private var urlFieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingInfo = false
 
     var body: some View {
@@ -33,6 +34,10 @@ struct RootView: View {
         .animation(.easeOut(duration: 0.14), value: library.isDropTargeted)
         .animation(.easeOut(duration: 0.16), value: showingInfo)
         .frame(minWidth: 380, minHeight: 420)
+        .overlay(alignment: .bottom) {
+            ToastStack(center: library.toasts)
+                .padding(8)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .beatSnapPanelShown)) { _ in
             // Let the panel settle before taking first responder.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -96,7 +101,7 @@ struct RootView: View {
     private var downloadBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 8) {
-                TextField("Paste a YouTube link…", text: $library.urlText)
+                TextField("Paste an audio or YouTube link…", text: $library.urlText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12.5))
                     .padding(.horizontal, 12)
@@ -113,10 +118,6 @@ struct RootView: View {
                     isEnabled: canSubmit,
                     action: submit
                 )
-            }
-
-            if let message = library.errorMessage {
-                ErrorCallout(message: message) { library.errorMessage = nil }
             }
         }
         .padding(.horizontal, Design.panelPadding)
@@ -159,6 +160,10 @@ struct RootView: View {
                 }
                 .padding(8)
                 .animation(.easeOut(duration: 0.18), value: library.queue.count)
+                // Animate the list's layout as a row gains or loses its transport bar.
+                // A row-local animation fades the bar but cannot move its siblings.
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: preview.pendingBeatID)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: preview.activeBeatID)
             }
             .scrollContentBackground(.hidden)
         }
@@ -330,55 +335,6 @@ private struct StageTile: View {
     }
 }
 
-private struct IndeterminateTileBorder: View {
-    @State private var rotation = 0.0
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: Design.rowCorner - 1)
-            .trim(from: 0, to: 0.28)
-            .stroke(Design.bpmTint, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-            .rotationEffect(.degrees(rotation))
-            .padding(1)
-        .onAppear {
-            withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
-                rotation = 360
-            }
-        }
-    }
-}
-
-private struct ErrorCallout: View {
-    let message: String
-    let dismiss: () -> Void
-
-    var body: some View {
-        // The icon tracks the first line of a wrapped message, while the dismiss button
-        // centres on the callout as a whole — hence the nested stack rather than one
-        // alignment for all three.
-        HStack(spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                Text(message)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
 private struct EmptyLibraryView: View {
     var body: some View {
         VStack(spacing: 8) {
@@ -388,7 +344,7 @@ private struct EmptyLibraryView: View {
                 .foregroundStyle(.tertiary)
             Text("No beats yet")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Paste a YouTube link above, or drop an audio file\nanywhere here, to detect its BPM and key.")
+            Text("Paste a YouTube, direct audio, Google Drive, or\nDropbox link above — or drop an audio file here.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
