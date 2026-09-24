@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private var panel: BeatPanel?
     private var hotKey: GlobalHotKey?
+    private var isRecordingShortcut = false
+    private var showMenuItem: NSMenuItem?
     /// Last count painted into the menubar, so stage churn doesn't repaint needlessly.
     private var badgedCount = 0
 
@@ -117,11 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let show = NSMenuItem(
             title: "Show BeatSnap",
             action: #selector(showFromMenu),
-            keyEquivalent: "b"
+            keyEquivalent: ""
         )
-        show.keyEquivalentModifierMask = [.command, .option, .control, .shift]
         show.target = self
         menu.addItem(show)
+        showMenuItem = show
+        updateMenuShortcut()
 
         menu.addItem(.separator())
 
@@ -207,12 +210,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func setupHotKey() {
+        // Release any previous registration before registering the same saved shortcut.
+        hotKey = nil
+        let shortcut = AppSettings.shared.windowShortcut
         hotKey = GlobalHotKey(
-            keyCode: UInt32(kVK_ANSI_B),
-            modifiers: GlobalHotKey.hyperModifiers
+            keyCode: shortcut.keyCode,
+            modifiers: shortcut.modifiers
         ) { [weak self] in
             Task { @MainActor in self?.togglePanel() }
         }
+    }
+
+    private func updateMenuShortcut() {
+        let shortcut = AppSettings.shared.windowShortcut
+        showMenuItem?.keyEquivalent = shortcut.key.count == 1
+            ? shortcut.key.lowercased() : ""
+        showMenuItem?.keyEquivalentModifierMask = shortcut.menuModifiers
+    }
+
+    private func changeShortcut(_ shortcut: WindowShortcut) -> Bool {
+        let current = AppSettings.shared.windowShortcut
+        if shortcut == current {
+            setupHotKey()
+            return hotKey != nil
+        }
+        let replacement = GlobalHotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers) {
+            [weak self] in Task { @MainActor in self?.togglePanel() }
+        }
+        guard let replacement else {
+            setupHotKey()
+            return false
+        }
+        hotKey = replacement
+        AppSettings.shared.windowShortcut = shortcut
+        updateMenuShortcut()
+        return true
     }
 
     // MARK: - Panel
@@ -224,6 +256,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             tools: tools,
             onKeepOnTopChanged: { [weak self] enabled in
                 self?.panel?.setKeepOnTop(enabled)
+            },
+            onShortcutChanged: { [weak self] shortcut in
+                self?.changeShortcut(shortcut) ?? false
+            },
+            onShortcutRecordingChanged: { [weak self] recording in
+                self?.isRecordingShortcut = recording
+                if recording { self?.hotKey = nil }
+                else if self?.hotKey == nil { self?.setupHotKey() }
             }
         )
             .environment(library)
@@ -259,6 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func quit() { NSApp.terminate(nil) }
 
     func togglePanel() {
+        guard !isRecordingShortcut else { return }
         guard let panel else { return }
         if panel.isVisible && panel.isKeyWindow {
             panel.orderOut(nil)

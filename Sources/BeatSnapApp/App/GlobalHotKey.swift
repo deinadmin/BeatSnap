@@ -8,8 +8,9 @@ import Foundation
 final class GlobalHotKey {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
-    private let handler: () -> Void
-    private static var registry: [UInt32: GlobalHotKey] = [:]
+    // Store the callback rather than the hotkey object. Retaining the object here would
+    // prevent deinit from unregistering its Carbon shortcut when recording begins.
+    private static var registry: [UInt32: () -> Void] = [:]
     private static var nextID: UInt32 = 1
 
     private let identifier: UInt32
@@ -18,10 +19,9 @@ final class GlobalHotKey {
     ///   - keyCode: A virtual key code, e.g. `kVK_ANSI_B`.
     ///   - modifiers: Carbon modifier mask, e.g. `cmdKey | optionKey`.
     init?(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
-        self.handler = handler
         self.identifier = Self.nextID
         Self.nextID += 1
-        Self.registry[identifier] = self
+        Self.registry[identifier] = handler
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -40,7 +40,7 @@ final class GlobalHotKey {
                 &hotKeyID
             )
             guard status == noErr else { return status }
-            GlobalHotKey.registry[hotKeyID.id]?.handler()
+            GlobalHotKey.registry[hotKeyID.id]?()
             return noErr
         }
 

@@ -5,6 +5,8 @@ struct RootView: View {
     let preview: AudioPreview
     let tools: ToolStatus
     let onKeepOnTopChanged: (Bool) -> Void
+    let onShortcutChanged: (WindowShortcut) -> Bool
+    let onShortcutRecordingChanged: (Bool) -> Void
 
     @FocusState private var urlFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -20,7 +22,9 @@ struct RootView: View {
             }
 
             if showingInfo {
-                InfoCard(tools: tools, onKeepOnTopChanged: onKeepOnTopChanged) {
+                InfoCard(tools: tools, onKeepOnTopChanged: onKeepOnTopChanged,
+                         onShortcutChanged: onShortcutChanged,
+                         onShortcutRecordingChanged: onShortcutRecordingChanged) {
                     showingInfo = false
                 }
             }

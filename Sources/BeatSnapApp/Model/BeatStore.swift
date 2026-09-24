@@ -77,6 +77,7 @@ final class AppSettings {
         static let lastToolUpdateCheck = "lastToolUpdateCheck"
         static let analysisAlgorithm = "analysisAlgorithm"
         static let keepBeatSnapOnTop = "keepBeatSnapOnTop"
+        static let windowShortcut = "windowShortcut"
     }
 
     /// nil means "use the default folder".
@@ -100,6 +101,18 @@ final class AppSettings {
     var keepBeatSnapOnTop: Bool {
         get { UserDefaults.standard.object(forKey: Keys.keepBeatSnapOnTop) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: Keys.keepBeatSnapOnTop) }
+    }
+
+    var windowShortcut: WindowShortcut {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: Keys.windowShortcut),
+                  let shortcut = try? JSONDecoder().decode(WindowShortcut.self, from: data)
+            else { return .defaultShortcut }
+            return shortcut
+        }
+        set {
+            UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Keys.windowShortcut)
+        }
     }
 
     /// The preferred analyzer for newly queued work. Apple is the default wherever the

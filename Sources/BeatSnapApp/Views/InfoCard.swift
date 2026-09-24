@@ -12,10 +12,16 @@ struct InfoCard: View {
 
     let tools: ToolStatus
     let onKeepOnTopChanged: (Bool) -> Void
+    let onShortcutChanged: (WindowShortcut) -> Bool
+    let onShortcutRecordingChanged: (Bool) -> Void
     let dismiss: () -> Void
 
     @State private var keepBeatSnapOnTop = AppSettings.shared.keepBeatSnapOnTop
     @State private var analysisAlgorithm = AppSettings.shared.analysisAlgorithm
+    @State private var shortcut = AppSettings.shared.windowShortcut
+    @State private var isRecordingShortcut = false
+    @State private var shortcutMonitor: Any?
+    @State private var shortcutError = false
 
     var body: some View {
         ZStack {
@@ -29,6 +35,7 @@ struct InfoCard: View {
                 .transition(.scale(scale: 0.94).combined(with: .opacity))
         }
         .task { await tools.loadVersions() }
+        .onDisappear { stopRecordingShortcut() }
     }
 
     private var card: some View {
@@ -51,6 +58,22 @@ struct InfoCard: View {
 
     private var analyzerSettings: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Shortcut")
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer(minLength: 8)
+                Button(isRecordingShortcut ? "Press shortcut…" :
+                       shortcutError ? "Unavailable — retry" : shortcut.label) {
+                    if isRecordingShortcut { stopRecordingShortcut() }
+                    else { startRecordingShortcut() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Set the shortcut to show or hide the BeatSnap window")
+                .accessibilityLabel("Show or hide BeatSnap shortcut")
+                .accessibilityValue(isRecordingShortcut ? "Waiting for shortcut" : shortcut.label)
+            }
+
             HStack(spacing: 8) {
                 Text("Keep window on top")
                     .font(.system(size: 12.5, weight: .medium))
@@ -77,6 +100,31 @@ struct InfoCard: View {
         .padding(.vertical, 14)
     }
 
+    private func startRecordingShortcut() {
+        shortcutError = false
+        isRecordingShortcut = true
+        onShortcutRecordingChanged(true)
+        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 { // Escape cancels recording.
+                stopRecordingShortcut()
+                return nil
+            }
+            guard let candidate = WindowShortcut(event: event) else { return nil }
+            shortcutError = !onShortcutChanged(candidate)
+            if !shortcutError { shortcut = candidate }
+            stopRecordingShortcut()
+            return nil
+        }
+    }
+
+    private func stopRecordingShortcut() {
+        if let shortcutMonitor { NSEvent.removeMonitor(shortcutMonitor) }
+        shortcutMonitor = nil
+        guard isRecordingShortcut else { return }
+        isRecordingShortcut = false
+        onShortcutRecordingChanged(false)
+    }
+
     private var analyzerPicker: some View {
         HStack {
             Text("Algorithm")
@@ -89,7 +137,7 @@ struct InfoCard: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .controlSize(.regular)
+            .controlSize(.small)
             .fixedSize()
             .onChange(of: analysisAlgorithm) { _, newValue in
                 AppSettings.shared.analysisAlgorithm = newValue
