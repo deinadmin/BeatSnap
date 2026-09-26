@@ -16,6 +16,7 @@ final class BeatLibrary {
     private(set) var isLoadingFolder = true
     /// Pending, in-flight and failed items, oldest first.
     private(set) var queue: [QueueItem] = []
+    @ObservationIgnored var canUseLibrary: () -> Bool = { false }
     let toasts = ToastCenter()
     let downloads = CloudDownloads()
 
@@ -122,6 +123,7 @@ final class BeatLibrary {
     /// check and the "longer than 10 minutes" question all belong to the moment the user hits
     /// Download, not to whenever the item reaches the front of the queue.
     func submitCurrentURL() async {
+        guard canUseLibrary() else { return }
         let link = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !link.isEmpty, !isCheckingLink else { return }
 
@@ -143,6 +145,7 @@ final class BeatLibrary {
                 return
             }
             let info = try await YouTubeDownloader.fetchInfo(url: link)
+            guard canUseLibrary() else { return }
             if let duplicate = duplicateMessage(videoID: info.id) {
                 toasts.show(.error, title: "Already added", message: duplicate)
                 return
@@ -160,6 +163,7 @@ final class BeatLibrary {
     }
 
     func confirmPendingLongVideo() {
+        guard canUseLibrary() else { return }
         guard let pending = pendingLongVideo else { return }
         pendingLongVideo = nil
         urlText = ""
@@ -168,6 +172,7 @@ final class BeatLibrary {
 
     /// Queue audio files dropped onto the panel, in the order they were dropped.
     func importDroppedFiles(_ urls: [URL]) {
+        guard canUseLibrary() else { return }
         var duplicates = 0
         for url in urls {
             // Re-dropping a beat that's already indexed (straight out of the beats folder)
@@ -217,6 +222,7 @@ final class BeatLibrary {
     // MARK: - Queue
 
     private func enqueue(_ item: QueueItem) {
+        guard canUseLibrary() else { return }
         queue.append(item)
         // A drain already in flight will pick this up on its next pass; no second worker.
         guard worker == nil else { return }
@@ -226,7 +232,7 @@ final class BeatLibrary {
     /// One item at a time, oldest first. Failed items stay in the list as their own error
     /// message and are stepped over rather than retried.
     private func drain() async {
-        while let next = queue.first(where: { !$0.stage.isFailed }) {
+        while canUseLibrary(), let next = queue.first(where: { !$0.stage.isFailed }) {
             switch next.source {
             case .youtube(let url, let info): await download(next.id, url: url, info: info)
             case .remote(let link): await downloadFile(next.id, link: link)
@@ -239,6 +245,16 @@ final class BeatLibrary {
         // Safe to clear: nothing can be appended between the loop test and here without the
         // whole method being suspended, and every mutation happens on the main actor.
         worker = nil
+    }
+
+    /// Existing work may finish safely; queued work waits until activation is restored.
+    func licenseAccessChanged(_ enabled: Bool) {
+        if !enabled {
+            pendingLongVideo = nil
+            isDropTargeted = false
+        } else if worker == nil, queue.contains(where: { !$0.stage.isFailed }) {
+            worker = Task { [weak self] in await self?.drain() }
+        }
     }
 
     private func setStage(_ stage: QueueStage, for id: QueueItem.ID) {

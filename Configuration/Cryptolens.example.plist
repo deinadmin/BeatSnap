@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>productID</key>
+    <integer>0</integer>
+    <key>accessToken</key>
+    <string>REPLACE_WITH_PRODUCT_RESTRICTED_CLIENT_TOKEN</string>
+    <key>rsaPublicKey</key>
+    <string>&lt;RSAKeyValue&gt;&lt;Modulus&gt;REPLACE&lt;/Modulus&gt;&lt;Exponent&gt;AQAB&lt;/Exponent&gt;&lt;/RSAKeyValue&gt;</string>
+</dict>
+</plist>

@@ -4,6 +4,7 @@ import AppKit
 /// name never gets pasted into the download field. Ordinary text keeps its native behavior.
 @MainActor
 final class AudioPasteHandler {
+    var canImport: () -> Bool = { true }
     var onPaste: (([URL]) -> Void)?
     var onRejectedFiles: (() -> Void)?
 
@@ -14,6 +15,7 @@ final class AudioPasteHandler {
     @discardableResult
     func paste(from pasteboard: NSPasteboard) -> Bool {
         guard Self.containsFiles(on: pasteboard) else { return false }
+        guard canImport() else { return true }
         let urls = pasteboard.readObjects(forClasses: [NSURL.self],
                                          options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         let audio = urls.filter(\.isAudioFile)

@@ -9,53 +9,48 @@ struct ToastStack: View {
     @State private var isHovering = false
     @State private var isWindowVisible = true
     @State private var isExpandedByKeyboard = false
-    @Namespace private var glassNamespace
 
     private var isExpanded: Bool { isHovering || isExpandedByKeyboard || voiceOverEnabled }
     private var isPaused: Bool { isExpanded || !isWindowVisible }
     private var activeItems: [Toast] { center.items.filter { !$0.isDismissing } }
 
     var body: some View {
-        GlassEffectContainer(spacing: 0) {
-            ToastStackLayout(expansion: isExpanded ? 1 : 0) {
-                ForEach(center.items) { toast in
-                    let siblings = toast.isDismissing ? center.items : activeItems
-                    let depth = siblings.count - 1 - (siblings.firstIndex(where: { $0.id == toast.id }) ?? 0)
-                    let slidesOut = toast.isDismissing && !reduceMotion
-                    ToastCard(toast: toast, showsContent: isExpanded || depth == 0,
-                              dismiss: { center.dismiss(toast.id) })
-                        .glassEffectID(toast.id, in: glassNamespace)
-                        // Let the card's bottom-edge transition move the entire surface.
-                        // Glass's default geometry morph can otherwise grow a new toast
-                        // from the middle of the existing stack.
-                        .glassEffectTransition(.identity)
-                        .scaleEffect(x: isExpanded ? 1 : 1 - CGFloat(depth) * 0.045, y: 1, anchor: .bottom)
-                        .blur(radius: slidesOut ? 6 : 0)
-                        .opacity(toast.isDismissing ? 0 : 1)
-                        .visualEffect { content, geometry in
-                            content.offset(y: slidesOut ? geometry.size.height + 8 : 0)
-                        }
-                        .animation(.easeInOut(duration: Toast.dismissalDuration), value: toast.isDismissing)
-                        .zIndex(Double(center.items.firstIndex(where: { $0.id == toast.id }) ?? 0))
-                        .allowsHitTesting(!toast.isDismissing && (isExpanded || depth == 0))
-                        .accessibilityHidden(toast.isDismissing)
-                        .layoutValue(key: ToastSlotKey.self,
-                                     value: ToastSlot(id: toast.id, isDismissing: toast.isDismissing))
-                        .transition(.asymmetric(
-                            insertion: reduceMotion ? .opacity : .move(edge: .bottom)
-                                .combined(with: .opacity)
-                                .combined(with: .modifier(active: ToastBlur(radius: 6),
-                                                          identity: ToastBlur(radius: 0))),
-                            // Eviction must be immediate, even while the new card fades in.
-                            removal: .identity
-                        ))
-                        .task(id: isPaused) {
-                            guard !isPaused else { return }
-                            do {
-                                try await Task.sleep(for: toast.lifetime)
-                                center.dismiss(toast.id)
-                            } catch { /* Hovering, hiding, or eviction cancels expiration. */ }
-                        }
+        ToastStackLayout(expansion: isExpanded ? 1 : 0) {
+            ForEach(center.items) { toast in
+                let siblings = toast.isDismissing ? center.items : activeItems
+                let depth = siblings.count - 1 - (siblings.firstIndex(where: { $0.id == toast.id }) ?? 0)
+                let slidesOut = toast.isDismissing && !reduceMotion
+                // Keep overlapping cards in separate glass containers so their
+                // surfaces cannot merge or morph into one another.
+                GlassEffectContainer(spacing: 0) {
+                    ToastCard(toast: toast, dismiss: { center.dismiss(toast.id) })
+                }
+                .scaleEffect(x: isExpanded ? 1 : 1 - CGFloat(depth) * 0.045, y: 1, anchor: .bottom)
+                .blur(radius: slidesOut ? 6 : 0)
+                .opacity(toast.isDismissing ? 0 : 1)
+                .visualEffect { content, geometry in
+                    content.offset(y: slidesOut ? geometry.size.height + 8 : 0)
+                }
+                .animation(.easeInOut(duration: Toast.dismissalDuration), value: toast.isDismissing)
+                .zIndex(Double(center.items.firstIndex(where: { $0.id == toast.id }) ?? 0))
+                .allowsHitTesting(!toast.isDismissing && (isExpanded || depth == 0))
+                .accessibilityHidden(toast.isDismissing)
+                .layoutValue(key: ToastSlotKey.self,
+                             value: ToastSlot(id: toast.id, isDismissing: toast.isDismissing))
+                .transition(.asymmetric(
+                    insertion: reduceMotion ? .opacity : .move(edge: .bottom)
+                        .combined(with: .opacity)
+                        .combined(with: .modifier(active: ToastBlur(radius: 6),
+                                                  identity: ToastBlur(radius: 0))),
+                    // Eviction must be immediate, even while the new card fades in.
+                    removal: .identity
+                ))
+                .task(id: isPaused) {
+                    guard !isPaused else { return }
+                    do {
+                        try await Task.sleep(for: toast.lifetime)
+                        center.dismiss(toast.id)
+                    } catch { /* Hovering, hiding, or eviction cancels expiration. */ }
                 }
             }
         }
@@ -178,7 +173,6 @@ private struct ToastStackLayout: Layout {
 private struct ToastCard: View {
     @Environment(\.colorScheme) private var colorScheme
     let toast: Toast
-    let showsContent: Bool
     let dismiss: () -> Void
 
     // macOS 26 resolves these against the window/container, subtracting the toast inset.
@@ -236,28 +230,25 @@ private struct ToastCard: View {
             .accessibilityLabel("Dismiss \(toast.title)")
             .help("Dismiss notification")
         }
-        // Glass surfaces share a compositor, so zIndex/clipping alone cannot hide the
-        // foreground of a card behind another glass card. Hide it BEFORE glassEffect.
-        .opacity(showsContent ? 1 : 0)
-        .animation(showsContent ? .easeOut(duration: 0.12).delay(0.1) : nil, value: showsContent)
-        .accessibilityHidden(!showsContent)
         .foregroundStyle(.primary)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .glassEffect(.regular.tint(colorScheme == .dark ? .black.opacity(0.8) : .white.opacity(0.8)), in: shape)
-        // Draw separation outside the shared glass compositor: overlapping glass
-        // surfaces alone can flatten both their borders and their shadows.
         .background {
             shape.fill(colorScheme == .dark ? Color.black : Color.white)
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.6 : 0.2), radius: 3, y: 1)
-                .shadow(color: .black.opacity(0.12), radius: 9, y: 3)
         }
         .overlay {
             shape.stroke(colorScheme == .dark ? Color.white.opacity(0.22) : Color.black.opacity(0.16),
                                lineWidth: 0.75)
                 .allowsHitTesting(false)
         }
+        // Composite each complete surface before shadowing it so the shadow sits
+        // over older cards. The upward contact shadow defines the narrow shoulders
+        // of the collapsed stack without a heavy halo around the whole stack.
+        .compositingGroup()
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.3 : 0.12), radius: 2, y: -1)
+        .shadow(color: .black.opacity(0.06), radius: 7, y: 2)
         .help("\(toast.title)\n\(toast.message)")
     }
 }

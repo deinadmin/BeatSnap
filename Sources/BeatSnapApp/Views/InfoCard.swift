@@ -10,12 +10,19 @@ struct InfoCard: View {
     private static let cardWidth: CGFloat = 296
     private static let sectionInset: CGFloat = 16
 
+    let license: LicenseService
+    let toasts: ToastCenter
     let tools: ToolStatus
     let onKeepOnTopChanged: (Bool) -> Void
     let onShortcutChanged: (WindowShortcut) -> Bool
     let onShortcutRecordingChanged: (Bool) -> Void
     let dismiss: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var activationFailures = 0
+    @State private var isActivating = false
+    @State private var licenseCode = ""
+    @State private var licenseFieldFocused = false
     @State private var keepBeatSnapOnTop = AppSettings.shared.keepBeatSnapOnTop
     @State private var analysisAlgorithm = AppSettings.shared.analysisAlgorithm
     @State private var shortcut = AppSettings.shared.windowShortcut
@@ -29,12 +36,23 @@ struct InfoCard: View {
             // it, and let a click anywhere outside the card close it.
             Rectangle()
                 .fill(.thinMaterial)
-                .onTapGesture(perform: dismiss)
+                .onTapGesture { if license.isLicensed { dismiss() } }
 
-            card
-                .transition(.scale(scale: 0.94).combined(with: .opacity))
+            ScrollView {
+                card.padding(.vertical, 24)
+                    .frame(maxWidth: .infinity)
+            }
+            .scrollIndicators(.hidden)
+            .defaultScrollAnchor(.center, for: .alignment)
+            .transition(.scale(scale: 0.94).combined(with: .opacity))
         }
-        .task { await tools.loadVersions() }
+        .task(id: license.isLicensed) {
+            if license.isLicensed { await tools.loadVersions() }
+            else { licenseFieldFocused = true }
+        }
+        .onChange(of: license.isLicensed) { _, licensed in
+            if !licensed { stopRecordingShortcut() }
+        }
         .onDisappear { stopRecordingShortcut() }
     }
 
@@ -42,16 +60,110 @@ struct InfoCard: View {
         VStack(spacing: 0) {
             identity
             Divider().opacity(0.6)
-            analyzerSettings
-            Divider().opacity(0.6)
-            versions
-            Divider().opacity(0.6)
-            updater
+            if license.isLicensed {
+                licenseInformation
+                Divider().opacity(0.6)
+                analyzerSettings
+                Divider().opacity(0.6)
+                versions
+                Divider().opacity(0.6)
+                updater
+            } else {
+                activation
+            }
         }
         .frame(width: Self.cardWidth)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
-        .overlay(alignment: .topTrailing) { closeButton }
+        .overlay(alignment: .topTrailing) { if license.isLicensed { closeButton } }
         .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
+    }
+
+    private var activation: some View {
+        VStack(spacing: 12) {
+            LicenseCodeField(text: $licenseCode, isFocused: $licenseFieldFocused,
+                             isEnabled: !license.isBusy, onSubmit: activate)
+                .frame(height: 16)
+                .padding(10)
+                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("License code")
+                .keyframeAnimator(initialValue: CGFloat.zero, trigger: activationFailures) { [reduceMotion] field, offset in
+                    field.offset(x: reduceMotion ? 0 : offset)
+                } keyframes: { _ in
+                    LinearKeyframe(-7, duration: 0.06)
+                    LinearKeyframe(7, duration: 0.06)
+                    LinearKeyframe(-5, duration: 0.06)
+                    LinearKeyframe(5, duration: 0.06)
+                    LinearKeyframe(0, duration: 0.08)
+                }
+            AccentButton(
+                title: license.isBusy ? "Verifying…" : "Activate BeatSnap",
+                isBusy: license.isBusy,
+                isEnabled: !isActivating && !license.isBusy && LicenseCodeInput.isComplete(licenseCode),
+                action: activate
+            )
+        }
+        .padding(Self.sectionInset)
+    }
+
+    private func activate() {
+        guard !isActivating, !license.isBusy,
+              LicenseCodeInput.isComplete(licenseCode) else { return }
+        isActivating = true
+        Task {
+            defer { isActivating = false }
+            await license.activate(licenseCode)
+            guard !license.isLicensed, let message = license.message else { return }
+            // Keep the original input so a typo can be corrected without retyping the key.
+            licenseFieldFocused = true
+            activationFailures += 1
+            toasts.show(.error, title: "Could not activate BeatSnap", message: message)
+        }
+    }
+
+    private var licenseInformation: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("License")
+                .font(.system(size: 12.5, weight: .medium))
+            if license.isTestLicense {
+                Text("CARLO — Test license")
+                    .font(.system(size: 11.5, weight: .medium))
+                Text("No expiry • Local testing")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+            } else if let certificate = license.certificate {
+                Text("••••–" + certificate.key.suffix(5))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text("Valid until \(certificate.expiration.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 11.5))
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    let days = max(0, Int(ceil(certificate.expiration.timeIntervalSince(context.date) / 86400)))
+                    Text(days == 1 ? "1 day remaining" : "\(days) days remaining")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Button(license.isBusy ? "Please wait…" : "Remove License", role: .destructive) {
+                Task { await license.removeLicense() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(license.isBusy)
+            licenseMessage
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Self.sectionInset)
+    }
+
+    @ViewBuilder
+    private var licenseMessage: some View {
+        if let message = license.message {
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("License status: " + message)
+        }
     }
 
     // MARK: - Analyzer settings

@@ -74,6 +74,13 @@ struct AudioPasteHandlerTests {
         defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
         defer { defaults.setVolatileDomain(previous, forName: UserDefaults.argumentDomain) }
         let library = BeatLibrary()
+        // Unlicensed imports and submissions must never enter the queue.
+        library.importDroppedFiles([source])
+        library.urlText = "https://example.com/beat.wav"
+        await library.submitCurrentURL()
+        #expect(library.queue.isEmpty)
+        library.urlText = ""
+        library.canUseLibrary = { true }
         while library.isLoadingFolder { try await Task.sleep(for: .milliseconds(10)) }
         let handler = AudioPasteHandler()
         handler.onPaste = { library.importDroppedFiles($0) }

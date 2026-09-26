@@ -47,7 +47,7 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         setKeepOnTop(AppSettings.shared.keepBeatSnapOnTop)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        minSize = NSSize(width: 380, height: 420)
+        minSize = NSSize(width: 380, height: 630)
         // Launch at the narrowest width the layout allows (`minSize.width`, mirrored by
         // RootView's `minWidth`) and tall, so the beat list shows as many rows as possible
         // while covering as little of the DAW as possible. AppKit shrinks this to fit if
@@ -93,6 +93,13 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         // leaves the window alone, so the size above applies once and user resizes persist
         // from then on.
         setFrameAutosaveName("BeatSnapPanel-380x770")
+        // Preserve the saved position/size, but migrate windows below the new minimum.
+        if frame.height < minSize.height {
+            var restored = frame
+            restored.origin.y -= minSize.height - restored.height
+            restored.size.height = minSize.height
+            setFrame(restored, display: false)
+        }
 
         // The window is the last stop in AppKit's dragging-destination search, so this is
         // the backstop for any path where the content view isn't asked.

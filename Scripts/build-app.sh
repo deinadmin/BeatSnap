@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="$ROOT/Scripts/.cache"
 BUILD="$ROOT/.build/release"
-APP="$ROOT/build/BeatSnap.app"
+APP="${BEATSNAP_APP_PATH:-$ROOT/build/BeatSnap.app}"
 CONTENTS="$APP/Contents"
 RESOURCES="$CONTENTS/Resources"
 TOOLS="$RESOURCES/tools"
@@ -28,7 +28,12 @@ say() { printf "\033[1m==>\033[0m %s\n" "$1"; }
 
 say "Building BeatSnapApp (release)"
 cd "$ROOT"
-swift build -c release --product BeatSnapApp
+if [ "${BEATSNAP_ENABLE_TEST_LICENSE:-0}" = "1" ]; then
+  say "Enabling CARLO local test license — do not distribute this build"
+  swift build -c release --product BeatSnapApp -Xswiftc -DBEATSNAP_TEST_LICENSE
+else
+  swift build -c release --product BeatSnapApp
+fi
 
 # ---------------------------------------------------------------- fetch tools
 
@@ -129,6 +134,15 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Licensing configuration is a client credential, never an admin token or private key.
+LICENSE_CONFIG="${BEATSNAP_LICENSE_CONFIG:-$ROOT/Configuration/Cryptolens.plist}"
+if [ -f "$LICENSE_CONFIG" ]; then
+  plutil -lint "$LICENSE_CONFIG"
+  cp "$LICENSE_CONFIG" "$RESOURCES/Cryptolens.plist"
+else
+  say "No Cryptolens configuration bundled"
+fi
 
 # ---------------------------------------------------------------- sign
 

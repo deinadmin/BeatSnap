@@ -16,3 +16,5 @@ Scripts/.cache/
 .DS_Store
 
 AGENTS.md
+# Local Cryptolens client configuration
+Configuration/Cryptolens.plist

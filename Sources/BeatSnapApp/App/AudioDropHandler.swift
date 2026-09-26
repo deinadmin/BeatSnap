@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 /// over the content, which would swallow clicks meant for SwiftUI.
 @MainActor
 final class AudioDropHandler {
+    var canImport: () -> Bool = { true }
     var onTargetChange: ((Bool) -> Void)?
     var onDrop: (([URL]) -> Void)?
 
@@ -32,6 +33,7 @@ final class AudioDropHandler {
 
     func performDrag(_ sender: NSDraggingInfo) -> Bool {
         setTargeted(false)
+        guard accepts(sender) else { return false }
         let urls = Self.audioURLs(on: sender.draggingPasteboard)
         guard !urls.isEmpty else { return false }
         onDrop?(urls)
@@ -41,7 +43,7 @@ final class AudioDropHandler {
     /// A non-nil dragging source means the drag started inside BeatSnap — that's a beat on
     /// its way to a DAW, not an import.
     private func accepts(_ sender: NSDraggingInfo) -> Bool {
-        sender.draggingSource == nil && !Self.audioURLs(on: sender.draggingPasteboard).isEmpty
+        canImport() && sender.draggingSource == nil && !Self.audioURLs(on: sender.draggingPasteboard).isEmpty
     }
 
     private func setTargeted(_ value: Bool) {

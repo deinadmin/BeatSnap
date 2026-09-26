@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @Bindable var library: BeatLibrary
     let preview: AudioPreview
+    let license: LicenseService
     let tools: ToolStatus
     let onKeepOnTopChanged: (Bool) -> Void
     let onShortcutChanged: (WindowShortcut) -> Bool
@@ -14,15 +15,17 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 0) {
-                header
-                downloadBar
-                Divider().opacity(0.6)
-                content
+            if license.isLicensed {
+                VStack(spacing: 0) {
+                    header
+                    downloadBar
+                    Divider().opacity(0.6)
+                    content
+                }
             }
 
-            if showingInfo {
-                InfoCard(tools: tools, onKeepOnTopChanged: onKeepOnTopChanged,
+            if showingInfo || !license.isLicensed {
+                InfoCard(license: license, toasts: library.toasts, tools: tools, onKeepOnTopChanged: onKeepOnTopChanged,
                          onShortcutChanged: onShortcutChanged,
                          onShortcutRecordingChanged: onShortcutRecordingChanged) {
                     showingInfo = false
@@ -30,23 +33,26 @@ struct RootView: View {
             }
 
             // Above the info card: a drag is in progress, so its feedback wins.
-            if library.isDropTargeted {
+            if license.isLicensed && library.isDropTargeted {
                 DropOverlay()
                     .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.14), value: library.isDropTargeted)
         .animation(.easeOut(duration: 0.16), value: showingInfo)
-        .frame(minWidth: 380, minHeight: 420)
+        .frame(minWidth: 380, minHeight: 630)
         .overlay(alignment: .bottom) {
-            ToastStack(center: library.toasts)
-                .padding(8)
+            ToastStack(center: library.toasts).padding(8)
         }
         .onReceive(NotificationCenter.default.publisher(for: .beatSnapPanelShown)) { _ in
             // Let the panel settle before taking first responder.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                urlFieldFocused = true
+                urlFieldFocused = license.isLicensed
             }
+        }
+        .onChange(of: license.isLicensed) { _, licensed in
+            showingInfo = false
+            urlFieldFocused = licensed
         }
         .alert(
             "Are you sure?",

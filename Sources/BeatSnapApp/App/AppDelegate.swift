@@ -5,7 +5,13 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
-    private let library = BeatLibrary()
+    private let license = LicenseService()
+    private lazy var library: BeatLibrary = {
+        let library = BeatLibrary()
+        // Finder can deliver files before applicationDidFinishLaunching.
+        library.canUseLibrary = { [weak self] in self?.license.isLicensed ?? false }
+        return library
+    }()
     private let preview = AudioPreview()
     private lazy var tools = ToolStatus(toasts: library.toasts)
     private var statusItem: NSStatusItem?
@@ -20,6 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Menubar-only: no Dock icon, no app switcher entry.
         NSApp.setActivationPolicy(.accessory)
 
+        license.onAccessChanged = { [weak self] enabled in
+            self?.library.licenseAccessChanged(enabled)
+            if !enabled { self?.preview.stop() }
+        }
+        license.start()
         setupMainMenu()
         setupStatusItem()
         setupHotKey()
@@ -42,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func application(_ application: NSApplication, open urls: [URL]) {
         let audio = urls.filter(\.isAudioFile)
         guard !audio.isEmpty else { return }
+        guard license.isLicensed else { showPanel(); return }
         library.importDroppedFiles(audio)
     }
 
@@ -100,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if [#selector(openFolderFromMenu), #selector(chooseFolderFromMenu),
+            #selector(resetFolderFromMenu)].contains(menuItem.action) { return license.isLicensed }
         guard menuItem.action == #selector(pasteFromMenu(_:)) else { return true }
         return (panel != nil && NSApp.keyWindow === panel && AudioPasteHandler.containsFiles(on: .general))
             || NSApp.target(forAction: #selector(NSText.paste(_:))) != nil
@@ -253,6 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let root = RootView(
             library: library,
             preview: preview,
+            license: license,
             tools: tools,
             onKeepOnTopChanged: { [weak self] enabled in
                 self?.panel?.setKeepOnTop(enabled)
@@ -269,6 +284,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .environment(library)
             .environment(preview)
         let panel = BeatPanel(content: root)
+        panel.dropHandler.canImport = { [weak self] in self?.license.isLicensed ?? false }
+        panel.pasteHandler.canImport = { [weak self] in self?.license.isLicensed ?? false }
         panel.dropHandler.onTargetChange = { [weak self] targeted in
             self?.library.isDropTargeted = targeted
         }
@@ -287,14 +304,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func showFromMenu() { showPanel() }
 
-    @objc private func openFolderFromMenu() { library.openBeatsFolder() }
+    @objc private func openFolderFromMenu() { if license.isLicensed { library.openBeatsFolder() } }
 
     @objc private func chooseFolderFromMenu() {
+        guard license.isLicensed else { return }
         NSApp.activate(ignoringOtherApps: true)
         library.chooseDownloadFolder()
     }
 
-    @objc private func resetFolderFromMenu() { library.resetDownloadFolder() }
+    @objc private func resetFolderFromMenu() { if license.isLicensed { library.resetDownloadFolder() } }
 
     @objc private func quit() { NSApp.terminate(nil) }
 
@@ -311,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func showPanel() {
         guard let panel else { return }
         library.refreshFolder()
-        checkClipboardForLink()
+        if license.isLicensed { checkClipboardForLink() }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         NotificationCenter.default.post(name: .beatSnapPanelShown, object: nil)
