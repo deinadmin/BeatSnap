@@ -12,11 +12,15 @@ import Observation
 @Observable
 final class BeatLibrary {
     private(set) var beats: [Beat] = []
+    /// Read-only previews of locked rows, kept outside the usable library.
+    private(set) var trialPreviewBeats: [Beat] = []
     /// Initial scan of the selected folder; background refreshes keep the list visible.
     private(set) var isLoadingFolder = true
     /// Pending, in-flight and failed items, oldest first.
     private(set) var queue: [QueueItem] = []
     @ObservationIgnored var canUseLibrary: () -> Bool = { false }
+    @ObservationIgnored var isTrialMode: () -> Bool = { false }
+    private static let trialBeatLimit = 10
     let toasts = ToastCenter()
     let downloads = CloudDownloads()
 
@@ -31,7 +35,7 @@ final class BeatLibrary {
     /// Items still to be done — failed rows are just receipts and don't count.
     var pendingCount: Int { queue.filter { !$0.stage.isFailed }.count }
 
-    private let store = BeatStore.shared
+    private let store: BeatStore
     private let analyzer = AppAudioAnalyzer()
     /// The single drain task, non-nil while the queue is being worked through.
     private var worker: Task<Void, Never>?
@@ -40,10 +44,12 @@ final class BeatLibrary {
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var scanRevision = UUID()
     @ObservationIgnored private var folderEntries: [String: BeatFolderScanner.Entry] = [:]
-    @ObservationIgnored private var displayedDirectory: URL?
+    private var displayedDirectory: URL?
+    @ObservationIgnored private var folderScanSucceeded = false
     @ObservationIgnored private let folderMonitor = BeatFolderMonitor()
 
-    init() {
+    init(store: BeatStore = .shared) {
+        self.store = store
         folderMonitor.onChange = { [weak self] in self?.refreshFolder() }
         refreshFolder()
         // A safety net for disconnected volumes, cloud providers, and in-place file writes
@@ -68,6 +74,7 @@ final class BeatLibrary {
     /// scans started before an import, rename, deletion, or change of selected folder.
     func refreshFolder() {
         scanTask?.cancel()
+        folderScanSucceeded = false
         let revision = UUID()
         scanRevision = revision
         let directory = store.beatsDirectory().standardizedFileURL
@@ -75,6 +82,7 @@ final class BeatLibrary {
         if displayedDirectory != directory {
             isLoadingFolder = true
             beats = []
+            trialPreviewBeats = []
             folderEntries = [:]
             displayedDirectory = directory
         }
@@ -94,17 +102,23 @@ final class BeatLibrary {
             defer { self.isLoadingFolder = false }
             switch result {
             case .success(let entries):
+                self.folderScanSucceeded = true
                 self.folderEntries = entries
                 var current: [Beat] = entries.values.map { $0.beat }
                 current.sort { (left: Beat, right: Beat) -> Bool in
                     if left.createdAt == right.createdAt { return left.filePath < right.filePath }
                     return left.createdAt > right.createdAt
                 }
+                let previews = self.isTrialMode()
+                    ? Array(current.dropFirst(Self.trialBeatLimit).prefix(3)) : []
+                if self.trialPreviewBeats != previews { self.trialPreviewBeats = previews }
+                if self.isTrialMode() { current = Array(current.prefix(Self.trialBeatLimit)) }
                 if self.beats != current { self.beats = current }
                 self.downloads.reconcile(current)
             case .failure(let error):
                 self.folderEntries = [:]
                 self.beats = []
+                self.trialPreviewBeats = []
                 self.toasts.report(error, title: "Could not read the beats folder")
             }
         }
@@ -129,6 +143,7 @@ final class BeatLibrary {
 
         isCheckingLink = true
         defer { isCheckingLink = false }
+        guard await waitForTrialCapacity(includeQueue: true) else { return }
 
         do {
             let source = try DownloadLink(link)
@@ -181,9 +196,9 @@ final class BeatLibrary {
                 duplicates += 1
                 continue
             }
-            enqueue(
+            guard enqueue(
                 QueueItem(title: url.deletingPathExtension().lastPathComponent, source: .file(url))
-            )
+            ) else { break }
         }
         if duplicates > 0 {
             let message = duplicates == 1
@@ -221,18 +236,26 @@ final class BeatLibrary {
 
     // MARK: - Queue
 
-    private func enqueue(_ item: QueueItem) {
-        guard canUseLibrary() else { return }
+    @discardableResult
+    private func enqueue(_ item: QueueItem) -> Bool {
+        guard canUseLibrary(), checkTrialCapacity(includeQueue: true) else { return false }
         queue.append(item)
         // A drain already in flight will pick this up on its next pass; no second worker.
-        guard worker == nil else { return }
+        guard worker == nil else { return true }
         worker = Task { [weak self] in await self?.drain() }
+        return true
     }
 
     /// One item at a time, oldest first. Failed items stay in the list as their own error
     /// message and are stepped over rather than retried.
     private func drain() async {
         while canUseLibrary(), let next = queue.first(where: { !$0.stage.isFailed }) {
+            guard await waitForTrialCapacity(includeQueue: false) else {
+                queue.removeAll { $0.id == next.id }
+                continue
+            }
+            guard canUseLibrary() else { break }
+            guard queue.contains(where: { $0.id == next.id }) else { continue }
             switch next.source {
             case .youtube(let url, let info): await download(next.id, url: url, info: info)
             case .remote(let link): await downloadFile(next.id, link: link)
@@ -249,12 +272,41 @@ final class BeatLibrary {
 
     /// Existing work may finish safely; queued work waits until activation is restored.
     func licenseAccessChanged(_ enabled: Bool) {
+        if !isTrialMode() { trialPreviewBeats = [] }
+        if isTrialMode(), beats.count > Self.trialBeatLimit {
+            trialPreviewBeats = Array(beats.dropFirst(Self.trialBeatLimit).prefix(3))
+            beats = Array(beats.prefix(Self.trialBeatLimit))
+        }
+        refreshFolder()
         if !enabled {
             pendingLongVideo = nil
             isDropTargeted = false
         } else if worker == nil, queue.contains(where: { !$0.stage.isFailed }) {
             worker = Task { [weak self] in await self?.drain() }
         }
+    }
+
+    /// Pending items reserve slots, while failed receipts do not. Use the complete folder
+    /// count so hidden older beats cannot create room for an eleventh file.
+    private func checkTrialCapacity(includeQueue: Bool) -> Bool {
+        guard isTrialMode() else { return true }
+        let count = max(folderEntries.count, beats.count) + (includeQueue ? pendingCount : 0)
+        guard count < Self.trialBeatLimit else {
+            toasts.show(.info, title: "BeatSnap is in Trial Mode",
+                        message: "Provide a full license to have more than 10 beats in your library.")
+            return false
+        }
+        return true
+    }
+
+    private func waitForTrialCapacity(includeQueue: Bool) async -> Bool {
+        guard isTrialMode() else { return true }
+        // Opening/pasting files can arrive before the initial scan, or during a folder switch.
+        // Refresh before committing too, in case files were added externally during analysis.
+        if scanTask == nil { refreshFolder() }
+        while let scan = scanTask { await scan.value }
+        guard canUseLibrary(), folderScanSucceeded else { return false }
+        return checkTrialCapacity(includeQueue: includeQueue)
     }
 
     private func setStage(_ stage: QueueStage, for id: QueueItem.ID) {
@@ -301,6 +353,10 @@ final class BeatLibrary {
             setStage(.analyzing, for: id)
             let analysis = try await analyze(url: downloaded)
 
+            guard await waitForTrialCapacity(includeQueue: false) else {
+                try? FileManager.default.removeItem(at: downloaded)
+                return
+            }
             setStage(.saving, for: id)
             let baseName = "\(BeatStore.sanitize(filename: info.title)) [\(analysis.bpm)BPM \(analysis.keyShort)]"
             let finalURL = BeatStore.uniqueURL(in: directory, baseName: baseName, extension: "wav")
@@ -336,6 +392,7 @@ final class BeatLibrary {
         do {
             let analysis = try await analyze(url: url)
 
+            guard await waitForTrialCapacity(includeQueue: false) else { return }
             setStage(.saving, for: id)
             let directory = store.beatsDirectory()
             let baseName = "\(BeatStore.sanitize(filename: title)) [\(analysis.bpm)BPM \(analysis.keyShort)]"
@@ -378,6 +435,7 @@ final class BeatLibrary {
         if store.isInBeatsDirectory(beat.fileURL) {
             beats.removeAll { $0.filePath == beat.filePath }
             beats.insert(beat, at: 0)
+            if isTrialMode() { beats = Array(beats.prefix(Self.trialBeatLimit)) }
         }
         refreshFolder()
     }
@@ -468,6 +526,64 @@ final class BeatLibrary {
         toasts.show(.success, title: "Tags updated", message: "\(current.title) · \(bpm) BPM · \(key.displayName)")
     }
 
+    /// Rename the beat's title. The filename keeps its existing BPM and key tag.
+    func rename(_ beat: Beat, to title: String) throws {
+        let trimmed = BeatStore.stripAnalysisTag(
+            from: title.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        guard !trimmed.isEmpty else { throw LabelUpdateError.invalidTitle }
+        let cleaned = BeatStore.sanitize(filename: trimmed)
+
+        guard let index = beats.firstIndex(where: { $0.id == beat.id }) else {
+            throw LabelUpdateError.beatNotFound
+        }
+        let current = beats[index]
+        guard let key = BeatKey(displayName: current.key) else {
+            throw LabelUpdateError.unsupportedKey(current.key)
+        }
+
+        let oldURL = current.fileURL
+        let source = FileManager.default.fileExists(atPath: oldURL.path)
+            ? oldURL
+            : CloudFileAccess.placeholderURL(for: oldURL)
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw LabelUpdateError.fileMissing
+        }
+
+        let ext = oldURL.pathExtension.isEmpty ? "wav" : oldURL.pathExtension
+        let baseName = "\(cleaned) [\(current.bpm)BPM \(key.filenameName)]"
+        let exactURL = oldURL.deletingLastPathComponent()
+            .appendingPathComponent("\(baseName).\(ext)")
+        let newURL = oldURL.standardizedFileURL == exactURL.standardizedFileURL
+            ? oldURL
+            : BeatStore.uniqueURL(
+                in: oldURL.deletingLastPathComponent(),
+                baseName: baseName,
+                extension: ext,
+                excluding: oldURL
+            )
+        guard newURL.standardizedFileURL != oldURL.standardizedFileURL || cleaned != current.title else {
+            return
+        }
+
+        let destination = source == oldURL ? newURL : CloudFileAccess.placeholderURL(for: newURL)
+        if source.standardizedFileURL != destination.standardizedFileURL {
+            do {
+                try FileManager.default.moveItem(at: source, to: destination)
+            } catch {
+                throw LabelUpdateError.renameFailed(error)
+            }
+        }
+
+        var updated = current
+        updated.title = cleaned
+        updated.fileName = newURL.lastPathComponent
+        updated.filePath = newURL.path
+        beats[index] = updated
+        refreshFolder()
+        toasts.show(.success, title: "Beat renamed", message: "\(cleaned) · \(current.bpm) BPM · \(key.displayName)")
+    }
+
     func delete(_ beat: Beat) {
         Task {
             do {
@@ -514,7 +630,19 @@ final class BeatLibrary {
     }
 
     var downloadFolderPath: String {
-        store.beatsDirectory().path
+        (displayedDirectory ?? store.beatsDirectory()).path
+    }
+
+    /// Only offer setup for an actually empty default library, never a pending or failed scan.
+    func shouldWelcomeAfterActivation() async -> Bool {
+        let defaultDirectory = store.defaultBeatsDirectory.resolvingSymlinksInPath().standardizedFileURL
+        guard store.beatsDirectory() == defaultDirectory else { return false }
+        refreshFolder()
+        while let pendingScan = scanTask {
+            await pendingScan.value
+            guard !Task.isCancelled else { return false }
+        }
+        return displayedDirectory == defaultDirectory && folderScanSucceeded && beats.isEmpty
     }
 
     var usingCustomFolder: Bool {
@@ -524,6 +652,7 @@ final class BeatLibrary {
 
 private enum LabelUpdateError: LocalizedError {
     case invalidBPM
+    case invalidTitle
     case beatNotFound
     case fileMissing
     case unsupportedKey(String)
@@ -533,6 +662,8 @@ private enum LabelUpdateError: LocalizedError {
         switch self {
         case .invalidBPM:
             "Enter a BPM between 1 and 999."
+        case .invalidTitle:
+            "Enter a name for this beat."
         case .beatNotFound:
             "This beat is no longer in the library."
         case .fileMissing:

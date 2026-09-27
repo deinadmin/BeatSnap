@@ -8,7 +8,7 @@ enum LicenseCodeInput {
             .filter { (65...90).contains($0.value) }
             .prefix(20)
         let key = String(String.UnicodeScalarView(letters))
-        if key == "CARLO" { return key }
+        if key == "CARLO" || key == "TRIAL" { return key }
 
         var result = ""
         for (index, letter) in key.enumerated() {
@@ -19,7 +19,7 @@ enum LicenseCodeInput {
     }
 
     static func isComplete(_ input: String) -> Bool {
-        if input == "CARLO" { return true }
+        if input == "CARLO" || input == "TRIAL" { return true }
         let groups = input.split(separator: "-", omittingEmptySubsequences: false)
         return groups.count == 4 && groups.allSatisfy {
             $0.count == 5 && $0.unicodeScalars.allSatisfy { (65...90).contains($0.value) }

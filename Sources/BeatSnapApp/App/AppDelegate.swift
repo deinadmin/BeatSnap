@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let library = BeatLibrary()
         // Finder can deliver files before applicationDidFinishLaunching.
         library.canUseLibrary = { [weak self] in self?.license.isLicensed ?? false }
+        library.isTrialMode = { [weak self] in self?.license.isTrialMode ?? false }
         return library
     }()
     private let preview = AudioPreview()

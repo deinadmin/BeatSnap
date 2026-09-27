@@ -47,7 +47,7 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         setKeepOnTop(AppSettings.shared.keepBeatSnapOnTop)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        minSize = NSSize(width: 380, height: 630)
+        minSize = NSSize(width: 380, height: 700)
         // Launch at the narrowest width the layout allows (`minSize.width`, mirrored by
         // RootView's `minWidth`) and tall, so the beat list shows as many rows as possible
         // while covering as little of the DAW as possible. AppKit shrinks this to fit if

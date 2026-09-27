@@ -20,11 +20,14 @@ struct LicenseConfiguration: Decodable {
 }
 
 enum LicenseError: LocalizedError {
+    static let activationNotFoundMessage = "Either the machine code was never activated or key activation feature was never set up."
     case message(String)
     case unavailable
+    case activationNotFound
     var errorDescription: String? {
         switch self {
         case .message(let message): return message
+        case .activationNotFound: return Self.activationNotFoundMessage
         case .unavailable: return "Could not reach the license server. Check your internet connection and try again."
         }
     }
@@ -38,12 +41,15 @@ struct LicenseCertificate: Decodable {
     let block: Bool
     let maxNoOfMachines: Int
     let activatedMachines: [Machine]?
+    /// Cryptolens feature F2 identifies the limited trial tier.
+    let trialFeature: Bool?
     struct Machine: Decodable {
         let mid: String
         enum CodingKeys: String, CodingKey { case mid = "Mid" }
     }
     enum CodingKeys: String, CodingKey {
         case productID = "ProductId", key = "Key", expires = "Expires", signDate = "SignDate"
+        case trialFeature = "F2"
         case block = "Block", maxNoOfMachines = "MaxNoOfMachines", activatedMachines = "ActivatedMachines"
     }
 
@@ -87,6 +93,13 @@ struct CryptolensClient {
         else { throw LicenseError.unavailable }
         let envelope = try JSONDecoder().decode(Envelope.self, from: data)
         guard envelope.result == 0 else {
+            // Cryptolens has no separate error code for an already-absent activation.
+            // Recognize only its documented response, and only for deactivation.
+            if method == "Deactivate", envelope.result == 1,
+               envelope.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == LicenseError.activationNotFoundMessage {
+                throw LicenseError.activationNotFound
+            }
             throw LicenseError.message(envelope.message?.isEmpty == false
                                        ? envelope.message! : "The license server rejected this license.")
         }
@@ -205,7 +218,9 @@ final class LicenseService {
     }
 
     private static let testActivationPreference = "BeatSnapCARLOTestLicense"
+    private static let trialTestActivationPreference = "BeatSnapTRIALTestLicense"
     private(set) var isTestLicense = false
+    private var isTrialTestLicense = false
     @ObservationIgnored private let allowsTestLicense: Bool
     @ObservationIgnored private let testDefaults: UserDefaults
     private(set) var certificate: LicenseCertificate?
@@ -219,6 +234,8 @@ final class LicenseService {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var lastCheck = Date.distantPast
     @ObservationIgnored var onAccessChanged: ((Bool) -> Void)?
+
+    var isTrialMode: Bool { isTestLicense ? isTrialTestLicense : certificate?.trialFeature == true }
 
     var isLicensed: Bool { isTestLicense || (certificate.map { $0.usableUntil > now && $0.usableUntil > Date() } ?? false) }
 
@@ -234,7 +251,9 @@ final class LicenseService {
         self.makeClient = makeClient
         self.machine = machine
         self.persistence = persistence
-        if allowsTestLicense && testDefaults.bool(forKey: Self.testActivationPreference) {
+        if allowsTestLicense && (testDefaults.bool(forKey: Self.testActivationPreference)
+                                 || testDefaults.bool(forKey: Self.trialTestActivationPreference)) {
+            isTrialTestLicense = testDefaults.bool(forKey: Self.trialTestActivationPreference)
             isTestLicense = true
             return
         }
@@ -266,8 +285,16 @@ final class LicenseService {
     func activate(_ input: String) async {
         let key = input.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !isBusy, !key.isEmpty else { return }
-        if allowsTestLicense && key == "CARLO" {
-            testDefaults.set(true, forKey: Self.testActivationPreference)
+        if key == "CARLO" || key == "TRIAL" {
+            guard allowsTestLicense else {
+                message = key == "CARLO"
+                    ? "Thanks for trying out my name! But I only accept real license codes."
+                    : "Test keys are not enabled in this build. Please enter a real license code."
+                return
+            }
+            isTrialTestLicense = key == "TRIAL"
+            testDefaults.set(!isTrialTestLicense, forKey: Self.testActivationPreference)
+            testDefaults.set(isTrialTestLicense, forKey: Self.trialTestActivationPreference)
             isTestLicense = true
             certificate = nil
             message = nil
@@ -296,6 +323,10 @@ final class LicenseService {
             try persistence.save(receipt)
             self.receipt = receipt
             self.certificate = certificate
+            isTestLicense = false
+            isTrialTestLicense = false
+            testDefaults.removeObject(forKey: Self.testActivationPreference)
+            testDefaults.removeObject(forKey: Self.trialTestActivationPreference)
         } catch LicenseError.unavailable {
             // Only connectivity/server failures permit the existing signed offline lease.
             message = isRefresh && isLicensed
@@ -312,6 +343,8 @@ final class LicenseService {
     func removeLicense() async {
         if isTestLicense {
             testDefaults.removeObject(forKey: Self.testActivationPreference)
+            testDefaults.removeObject(forKey: Self.trialTestActivationPreference)
+            isTrialTestLicense = false
             isTestLicense = false
             message = nil
             onAccessChanged?(isLicensed)
@@ -323,7 +356,12 @@ final class LicenseService {
         defer { isBusy = false; onAccessChanged?(isLicensed) }
         do {
             let client = try makeClient()
-            _ = try await client.request("Deactivate", key: receipt.key, machine: machine())
+            do {
+                _ = try await client.request("Deactivate", key: receipt.key, machine: machine())
+            } catch LicenseError.activationNotFound {
+                // A saved receipt can outlive its server activation (including reinstalls).
+                // Removal is complete remotely; still remove the local receipt below.
+            }
             try persistence.remove()
             self.receipt = nil
             certificate = nil

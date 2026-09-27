@@ -11,48 +11,62 @@ struct RootView: View {
 
     @FocusState private var urlFieldFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var showingInfo = false
+    @State private var cardScreen: InfoCard.Screen?
+
+    private var activeCard: InfoCard.Screen? {
+        license.isLicensed ? cardScreen : .activation
+    }
+
+    private var libraryVisible: Bool {
+        license.isLicensed && activeCard != .activation && activeCard != .welcome
+    }
 
     var body: some View {
         ZStack {
-            if license.isLicensed {
-                VStack(spacing: 0) {
-                    header
-                    downloadBar
-                    Divider().opacity(0.6)
-                    content
-                }
+            VStack(spacing: 0) {
+                header
+                downloadBar
+                Divider().opacity(0.6)
+                content
             }
+            .opacity(libraryVisible ? 1 : 0)
+            .allowsHitTesting(libraryVisible && activeCard == nil)
+            .accessibilityHidden(!libraryVisible || activeCard != nil)
+            .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.5), value: libraryVisible)
 
-            if showingInfo || !license.isLicensed {
-                InfoCard(license: license, toasts: library.toasts, tools: tools, onKeepOnTopChanged: onKeepOnTopChanged,
+            if let screen = activeCard {
+                InfoCard(screen: screen, library: library, license: license, toasts: library.toasts,
+                         tools: tools, onKeepOnTopChanged: onKeepOnTopChanged,
                          onShortcutChanged: onShortcutChanged,
-                         onShortcutRecordingChanged: onShortcutRecordingChanged) {
-                    showingInfo = false
+                         onShortcutRecordingChanged: onShortcutRecordingChanged,
+                         onActivated: finishActivation) {
+                    cardScreen = nil
                 }
             }
 
             // Above the info card: a drag is in progress, so its feedback wins.
-            if license.isLicensed && library.isDropTargeted {
+            if libraryVisible && activeCard == nil && library.isDropTargeted {
                 DropOverlay()
                     .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.14), value: library.isDropTargeted)
-        .animation(.easeOut(duration: 0.16), value: showingInfo)
-        .frame(minWidth: 380, minHeight: 630)
+        .animation(.easeOut(duration: 0.16), value: activeCard == nil)
+        .frame(minWidth: 380, minHeight: 700)
         .overlay(alignment: .bottom) {
             ToastStack(center: library.toasts).padding(8)
         }
         .onReceive(NotificationCenter.default.publisher(for: .beatSnapPanelShown)) { _ in
             // Let the panel settle before taking first responder.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                urlFieldFocused = license.isLicensed
+                urlFieldFocused = libraryVisible && activeCard == nil
             }
         }
-        .onChange(of: license.isLicensed) { _, licensed in
-            showingInfo = false
-            urlFieldFocused = licensed
+        .onChange(of: license.isLicensed, initial: true) { _, licensed in
+            if !licensed { cardScreen = .activation }
+        }
+        .onChange(of: activeCard) { _, screen in
+            urlFieldFocused = license.isLicensed && screen == nil
         }
         .alert(
             "Are you sure?",
@@ -70,19 +84,29 @@ struct RootView: View {
 
     // MARK: - Header
 
+    private func finishActivation() async {
+        let welcome = await library.shouldWelcomeAfterActivation()
+        guard license.isLicensed else { return }
+        cardScreen = welcome ? .welcome : nil
+        if !welcome {
+            library.toasts.show(.info, title: "BeatSnap activated",
+                                message: "BeatSnap has been activated successfully.")
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("\(Text("BeatSnap").bold()) by Carlo")
                     .font(.system(size: 15))
-                Text(library.subtitle)
+                Text(license.isTrialMode ? "Trial Mode" : library.subtitle)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             HStack(spacing: 6) {
                 CircleIconButton(systemName: "info", help: "BeatSnap by Carlo settings and info") {
-                    showingInfo.toggle()
+                    cardScreen = .information
                 }
                 CircleIconButton(systemName: "folder", help: "Open beats folder") {
                     library.openBeatsFolder()
@@ -166,6 +190,9 @@ struct RootView: View {
                     }
                     ForEach(library.beats) { beat in
                         BeatRowView(beat: beat)
+                    }
+                    if license.isTrialMode && !library.trialPreviewBeats.isEmpty {
+                        TrialLibraryPreview(beats: library.trialPreviewBeats)
                     }
                 }
                 .padding(8)

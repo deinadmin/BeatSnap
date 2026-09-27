@@ -13,6 +13,7 @@ struct LicenseCodeInputTests {
         #expect(LicenseCodeInput.format("dx1i!xn--vbkbi") == "DXIXN-VBKBI-")
         #expect(LicenseCodeInput.format("DXIXN-VBKBI-DUURI-DYMBHEXTRA") == "DXIXN-VBKBI-DUURI-DYMBH")
         #expect(LicenseCodeInput.format("carlo") == "CARLO")
+        #expect(LicenseCodeInput.format(" trial ") == "TRIAL")
         #expect(LicenseCodeInput.format("") == "")
         #expect(LicenseCodeInput.format("a b  c-123!?\t") == "ABC")
         #expect(LicenseCodeInput.format(String(repeating: "x", count: 30)).count == 23)
@@ -59,6 +60,7 @@ struct LicenseCodeInputTests {
     @Test func onlyCompleteKeysOrCarloCanSubmit() {
         #expect(LicenseCodeInput.isComplete("DXIXN-VBKBI-DUURI-DYMBH"))
         #expect(LicenseCodeInput.isComplete("CARLO"))
+        #expect(LicenseCodeInput.isComplete("TRIAL"))
         for input in ["", "CARL", "CARLO-", "DXIXN-VBKBI", "DXIXN-VBKBI-DUURI-DYMB1",
                       "dxixn-vbkbi-duuri-dymbh", "DXIXN VBKBI DUURI DYMBH"] {
             #expect(!LicenseCodeInput.isComplete(input))

@@ -3,6 +3,7 @@ import Foundation
 /// Locations and filename conventions for the folder-backed beat library.
 struct BeatStore {
     static let shared = BeatStore()
+    var directoryOverride: URL? = nil
 
     var supportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -17,7 +18,7 @@ struct BeatStore {
 
     /// Where new downloads land: the user's chosen folder, else the default.
     func beatsDirectory() -> URL {
-        let directory = AppSettings.shared.downloadDirectory ?? defaultBeatsDirectory
+        let directory = directoryOverride ?? AppSettings.shared.downloadDirectory ?? defaultBeatsDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.resolvingSymlinksInPath().standardizedFileURL
     }
@@ -56,10 +57,20 @@ struct BeatStore {
     }
 
     /// Resolve a non-colliding path by appending " (n)" before the extension.
-    static func uniqueURL(in directory: URL, baseName: String, extension ext: String) -> URL {
+    /// `excluding` is the file being renamed, so it does not count as a collision with itself.
+    /// A cloud placeholder for the same logical name counts as taken.
+    static func uniqueURL(in directory: URL, baseName: String, extension ext: String,
+                           excluding: URL? = nil) -> URL {
+        let excluded = excluding?.standardizedFileURL
+        func isAvailable(_ url: URL) -> Bool {
+            if url.standardizedFileURL == excluded { return true }
+            if FileManager.default.fileExists(atPath: url.path) { return false }
+            return !FileManager.default.fileExists(atPath: CloudFileAccess.placeholderURL(for: url).path)
+        }
+
         var candidate = directory.appendingPathComponent("\(baseName).\(ext)")
         var counter = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
+        while !isAvailable(candidate) {
             candidate = directory.appendingPathComponent("\(baseName) (\(counter)).\(ext)")
             counter += 1
         }

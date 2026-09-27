@@ -14,7 +14,7 @@ enum AnalysisAlgorithm: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .musicUnderstanding: "Apple"
+        case .musicUnderstanding: "Apple Native"
         case .beatSnapDSP: "BeatSnap Legacy"
         }
     }

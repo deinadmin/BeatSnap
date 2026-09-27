@@ -19,17 +19,18 @@ struct ToastStack: View {
             ForEach(center.items) { toast in
                 let siblings = toast.isDismissing ? center.items : activeItems
                 let depth = siblings.count - 1 - (siblings.firstIndex(where: { $0.id == toast.id }) ?? 0)
-                let slidesOut = toast.isDismissing && !reduceMotion
+                let animatesExit = toast.isDismissing && !reduceMotion
                 // Keep overlapping cards in separate glass containers so their
                 // surfaces cannot merge or morph into one another.
                 GlassEffectContainer(spacing: 0) {
                     ToastCard(toast: toast, dismiss: { center.dismiss(toast.id) })
                 }
                 .scaleEffect(x: isExpanded ? 1 : 1 - CGFloat(depth) * 0.045, y: 1, anchor: .bottom)
-                .blur(radius: slidesOut ? 6 : 0)
+                .scaleEffect(animatesExit && toast.isEvicted ? 0.78 : 1, anchor: .center)
+                .blur(radius: animatesExit ? 6 : 0)
                 .opacity(toast.isDismissing ? 0 : 1)
                 .visualEffect { content, geometry in
-                    content.offset(y: slidesOut ? geometry.size.height + 8 : 0)
+                    content.offset(y: animatesExit ? geometry.size.height + 8 : 0)
                 }
                 .animation(.easeInOut(duration: Toast.dismissalDuration), value: toast.isDismissing)
                 .zIndex(Double(center.items.firstIndex(where: { $0.id == toast.id }) ?? 0))
@@ -42,7 +43,9 @@ struct ToastStack: View {
                         .combined(with: .opacity)
                         .combined(with: .modifier(active: ToastBlur(radius: 6),
                                                   identity: ToastBlur(radius: 0))),
-                    // Eviction must be immediate, even while the new card fades in.
+                    // Fade, blur, and the downward move run while the card is still
+                    // present. An evicted card also shrinks. Removal happens after
+                    // that, on an already-invisible surface.
                     removal: .identity
                 ))
                 .task(id: isPaused) {
@@ -50,7 +53,7 @@ struct ToastStack: View {
                     do {
                         try await Task.sleep(for: toast.lifetime)
                         center.dismiss(toast.id)
-                    } catch { /* Hovering, hiding, or eviction cancels expiration. */ }
+                    } catch { /* Hovering or hiding the panel cancels expiration. */ }
                 }
             }
         }

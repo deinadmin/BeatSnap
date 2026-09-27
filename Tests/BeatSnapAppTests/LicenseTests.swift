@@ -20,6 +20,30 @@ struct LicenseTests {
         }
     }
 
+    @Test(arguments: [true, false])
+    func signedF2IdentifiesTrial(_ trial: Bool) throws {
+        let fixture = try fixture()
+        var data = payload()
+        data["F2"] = trial
+        let certificate = try fixture.client.verify(fixture.response(data), key: "TEST-KEY", machine: "mac", now: now)
+        #expect(certificate.trialFeature == trial)
+    }
+
+    @MainActor @Test func trialTierSurvivesOfflineRestart() throws {
+        let fixture = try fixture()
+        var data = payload()
+        data["F2"] = true
+        data["SignDate"] = Date().timeIntervalSince1970
+        data["Expires"] = Date().addingTimeInterval(86400).timeIntervalSince1970
+        let response = try fixture.response(data)
+        let receipt = LicenseKeychain.Receipt(key: "TEST-KEY", response: response)
+        let storage = LicensePersistence(read: { receipt }, save: { _ in }, remove: {})
+        let service = LicenseService(makeClient: { fixture.client }, machine: { "mac" },
+                                     persistence: storage, allowsTestLicense: false)
+        #expect(service.isLicensed)
+        #expect(service.isTrialMode)
+    }
+
     @Test func expirationCapsOfflineLease() throws {
         let fixture = try fixture()
         var data = payload()
@@ -180,24 +204,128 @@ struct LicenseTests {
         let storage = LicensePersistence(read: { nil }, save: { _ in Issue.record("Unexpected real receipt") },
                                          remove: { Issue.record("Unexpected real removal") })
         func service(enabled: Bool) -> LicenseService {
-            LicenseService(makeClient: { throw LicenseError.unavailable }, persistence: storage,
+            LicenseService(makeClient: {
+                Issue.record("CARLO must not contact the licensing service")
+                throw LicenseError.unavailable
+            }, persistence: storage,
                            allowsTestLicense: enabled, testDefaults: defaults)
         }
         let test = service(enabled: true)
         await test.activate("  carlo  ")
         #expect(test.isLicensed)
         #expect(test.isTestLicense)
+        #expect(!test.isTrialMode)
         let restart = service(enabled: true)
         #expect(restart.isLicensed)
         await restart.refresh()
         #expect(restart.isLicensed)
         let production = service(enabled: false)
         #expect(!production.isLicensed)
-        await production.activate("CARLO")
-        #expect(!production.isLicensed)
+        for input in ["CARLO", "  carlo  "] {
+            await production.activate(input)
+            #expect(!production.isLicensed)
+            #expect(!production.isTestLicense)
+            #expect(production.message == "Thanks for trying out my name! But I only accept real license codes.")
+        }
         await restart.removeLicense()
         #expect(!restart.isLicensed)
         #expect(!service(enabled: true).isLicensed)
+    }
+
+    @MainActor @Test func trialTestKeyPersistsSwitchesAndRemovesWithoutNetwork() async throws {
+        let suite = "BeatSnap-trial-test-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let storage = LicensePersistence(read: { nil }, save: { _ in Issue.record("Unexpected receipt") },
+                                         remove: { Issue.record("Unexpected removal") })
+        func service(enabled: Bool = true) -> LicenseService {
+            LicenseService(makeClient: {
+                Issue.record("Test keys must not contact the server")
+                throw LicenseError.unavailable
+            }, persistence: storage, allowsTestLicense: enabled, testDefaults: defaults)
+        }
+        let trial = service()
+        var notifications = 0
+        trial.onAccessChanged = { _ in notifications += 1 }
+        await trial.activate("  trial  ")
+        #expect(trial.isLicensed && trial.isTestLicense && trial.isTrialMode)
+        #expect(notifications == 1)
+        let restart = service()
+        #expect(restart.isLicensed && restart.isTrialMode)
+        await restart.refresh()
+        #expect(restart.isTrialMode)
+        let production = service(enabled: false)
+        await production.activate("TRIAL")
+        #expect(!production.isLicensed && !production.isTrialMode)
+        #expect(production.message != nil)
+        await restart.activate("CARLO")
+        #expect(restart.isLicensed && !restart.isTrialMode)
+        #expect(!service().isTrialMode)
+        await restart.activate("TRIAL")
+        #expect(service().isTrialMode)
+        await restart.removeLicense()
+        #expect(!restart.isLicensed && !restart.isTrialMode)
+        #expect(!service().isLicensed)
+    }
+
+    @Test(arguments: ["Activate", "Deactivate"])
+    func absentActivationIsRecognizedOnlyForDeactivation(_ method: String) async throws {
+        let config = LicenseConfiguration(productID: 42, accessToken: "test", rsaPublicKey: "")
+        let client = CryptolensClient(configuration: config, transfer: { request in
+            (try JSONSerialization.data(withJSONObject: [
+                "result": 1, "message": LicenseError.activationNotFoundMessage
+            ]), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        })
+        do {
+            _ = try await client.request(method, key: "TEST", machine: "mac")
+            Issue.record("Expected an error")
+        } catch LicenseError.activationNotFound {
+            #expect(method == "Deactivate")
+        } catch LicenseError.message(let message) {
+            #expect(method == "Activate")
+            #expect(message == LicenseError.activationNotFoundMessage)
+        }
+    }
+
+    @MainActor @Test func removingStaleReceiptHandlesAbsentActivationAndKeychainRetry() async throws {
+        let fixture = try fixture()
+        var data = payload()
+        data["SignDate"] = Date().timeIntervalSince1970
+        data["Expires"] = Date().addingTimeInterval(86400).timeIntervalSince1970
+        var saved: LicenseKeychain.Receipt? = .init(key: "TEST-KEY", response: try fixture.response(data))
+        var removalFails = true
+        var serverMessage = "Access denied."
+        let storage = LicensePersistence(read: { saved }, save: { saved = $0 }, remove: {
+            if removalFails { throw LicenseError.message("Keychain unavailable") }
+            saved = nil
+        })
+        var client = fixture.client
+        client.transfer = { request in
+            #expect(request.url?.lastPathComponent == "Deactivate")
+            return (try JSONSerialization.data(withJSONObject: ["result": 1, "message": serverMessage]),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let service = LicenseService(makeClient: { client }, machine: { "mac" },
+                                     persistence: storage, allowsTestLicense: false)
+        var access: Bool?
+        service.onAccessChanged = { access = $0 }
+        #expect(service.isLicensed)
+        await service.removeLicense()
+        #expect(service.isLicensed && saved != nil)
+        #expect(service.message == "Access denied.")
+        serverMessage = LicenseError.activationNotFoundMessage
+        await service.removeLicense()
+        #expect(service.isLicensed && saved != nil)
+        #expect(service.message == "Keychain unavailable")
+        removalFails = false
+        await service.removeLicense()
+        #expect(!service.isLicensed)
+        #expect(saved == nil && service.certificate == nil)
+        #expect(service.message == nil && !service.isBusy)
+        #expect(access == false)
+        let restart = LicenseService(makeClient: { client }, machine: { "mac" },
+                                     persistence: storage, allowsTestLicense: false)
+        #expect(!restart.isLicensed)
     }
 
     private func payload() -> [String: Any] {

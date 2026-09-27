@@ -78,6 +78,7 @@ struct BeatRowView: View {
         }
         .contextMenu {
             Button("Edit BPM & Key") { openEditor(.all) }
+            Button("Rename") { presentRenameAlert() }
             Divider()
             Button("Show in Finder") { library.revealInFinder(beat) }
             Button("Delete", role: .destructive) { confirmingDelete = true }
@@ -94,6 +95,47 @@ struct BeatRowView: View {
         }
         .popover(item: $editorScope, arrowEdge: .trailing) { scope in
             BeatLabelEditor(beat: beat, scope: scope)
+        }
+    }
+
+    /// SwiftUI's alert text field keeps the previous session's value, so a second rename
+    /// opens blank. An AppKit alert is given the current title every time it is shown.
+    private func presentRenameAlert() {
+        let beat = beat
+        let library = library
+        let alert = NSAlert()
+        alert.messageText = "Rename Beat"
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = beat.title
+        field.placeholderString = "Name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+
+        let submit = {
+            let name = field.stringValue
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            do {
+                try library.rename(beat, to: name)
+            } catch {
+                library.toasts.report(error, title: "Could not rename \(beat.title)")
+            }
+        }
+
+        guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0 is BeatPanel && $0.isVisible }) else {
+            if alert.runModal() == .alertFirstButtonReturn { submit() }
+            return
+        }
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn { submit() }
+        }
+        DispatchQueue.main.async {
+            window.makeFirstResponder(field)
+            field.currentEditor()?.selectedRange = NSRange(
+                location: 0, length: (field.stringValue as NSString).length
+            )
         }
     }
 

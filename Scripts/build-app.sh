@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Assemble BeatSnap.app: build the Swift executable, bundle the command-line tools it needs
-# (Python + yt-dlp + ffmpeg), write Info.plist, and ad-hoc sign the result.
+# (Python + yt-dlp + ffmpeg), write Info.plist, ad-hoc sign, and create the installer DMG.
 #
 # The downloaded tools are cached in Scripts/.cache so repeat builds stay fast.
 
@@ -10,7 +10,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="$ROOT/Scripts/.cache"
 BUILD="$ROOT/.build/release"
-APP="${BEATSNAP_APP_PATH:-$ROOT/build/BeatSnap.app}"
+OUTPUT_APP="${BEATSNAP_APP_PATH:-$ROOT/build/BeatSnap.app}"
+if [[ "$OUTPUT_APP" != /* ]]; then OUTPUT_APP="$ROOT/$OUTPUT_APP"; fi
+# Assemble and sign away from Finder/File Provider-managed output directories.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/beatsnap-app.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+APP="$WORK/$(basename "$OUTPUT_APP")"
 CONTENTS="$APP/Contents"
 RESOURCES="$CONTENTS/Resources"
 TOOLS="$RESOURCES/tools"
@@ -29,7 +36,7 @@ say() { printf "\033[1m==>\033[0m %s\n" "$1"; }
 say "Building BeatSnapApp (release)"
 cd "$ROOT"
 if [ "${BEATSNAP_ENABLE_TEST_LICENSE:-0}" = "1" ]; then
-  say "Enabling CARLO local test license — do not distribute this build"
+  say "Enabling CARLO and TRIAL local test licenses — do not distribute this build"
   swift build -c release --product BeatSnapApp -Xswiftc -DBEATSNAP_TEST_LICENSE
 else
   swift build -c release --product BeatSnapApp
@@ -67,7 +74,7 @@ fi
 
 # ---------------------------------------------------------------- assemble
 
-say "Assembling $APP"
+say "Assembling $OUTPUT_APP"
 rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES" "$TOOLS"
 
@@ -155,7 +162,7 @@ xattr -cr "$APP"
 
 # Nested tools first, then the bundle. The Python runtime loads its own .so files, so it
 # needs library validation disabled to run under a signed parent.
-ENTITLEMENTS="$(mktemp -t beatsnap-ents).plist"
+ENTITLEMENTS="$WORK/entitlements.plist"
 cat > "$ENTITLEMENTS" <<ENT
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -179,14 +186,34 @@ find "$TOOLS" -type f \( -perm -u+x -o -name "*.dylib" -o -name "*.so" \) -print
       fi
     done
 
+xattr -cr "$APP"
 codesign --force --deep --sign - --timestamp=none \
   --entitlements "$ENTITLEMENTS" "$APP"
 rm -f "$ENTITLEMENTS"
 
 say "Verifying"
-codesign --verify --deep --strict "$APP" && echo "  signature ok"
+codesign --verify --deep --strict "$APP"
+echo "  signature ok"
 
-SIZE="$(du -sh "$APP" | cut -f1)"
-say "Done: $APP ($SIZE)"
+# Publish only the verified bundle. Do not copy resource forks or extended attributes.
+mkdir -p "$(dirname "$OUTPUT_APP")"
+rm -rf "$OUTPUT_APP"
+ditto --noextattr --norsrc "$APP" "$OUTPUT_APP"
+# Verify the published bytes through a clean local copy: File Providers may restore
+# FinderInfo to the Desktop bundle immediately, even between xattr and codesign.
+VERIFY_APP="$WORK/published/$(basename "$OUTPUT_APP")"
+ditto --noextattr --norsrc "$OUTPUT_APP" "$VERIFY_APP"
+xattr -cr "$VERIFY_APP"
+codesign --verify --deep --strict "$VERIFY_APP"
+
+# ---------------------------------------------------------------- installer
+# Set BEATSNAP_SKIP_DMG=1 for app-only development builds.
+if [ "${BEATSNAP_SKIP_DMG:-0}" != "1" ]; then
+  say "Creating drag-to-install DMG"
+  "$ROOT/Scripts/create-dmg.sh" "$OUTPUT_APP"
+fi
+
+SIZE="$(du -sh "$OUTPUT_APP" | cut -f1)"
+say "Done: $OUTPUT_APP ($SIZE)"
 echo
-echo "  open \"$APP\""
+echo "  open \"$OUTPUT_APP\""

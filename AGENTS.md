@@ -72,10 +72,11 @@ errors, key 13/16 exact (15/16 including relative/fifth neighbours).
   pipeline. Share links need public access and downloads enabled; folders and private
   account authorization are not supported. Drive confirmation requests are restricted to
   Google's download endpoints and the original file ID.
-- **Toasts belong to the library.** `ToastCenter` keeps at most three items. Normal dismissal
-  frees its layout space immediately, retains the outgoing surface for its slide/fade, then
-  removes it; capacity eviction removes it
-  immediately and cancels its dismissal task. The view pauses expiry while hovered, while
+- **Toasts belong to the library.** `ToastCenter` keeps at most three items in the stack. Normal
+  dismissal frees its layout space immediately, retains the outgoing surface for its slide/fade/blur,
+  then removes it. Capacity eviction frees that space the same way, then fades, blurs, shrinks, and
+  drops the oldest surface before removing it, so a fourth toast never waits off-screen. The view pauses
+  expiry while hovered, while
   the panel is closed/minimized, or with VoiceOver. Queue failures still keep their receipts.
   Hide older cards' foreground content before `glassEffect` when collapsed: glass compositing
   can otherwise expose overlapping text even when the cards use z-index or clipping.
