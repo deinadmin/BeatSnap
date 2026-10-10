@@ -4,8 +4,9 @@
 # the draft in the admin so you can write the release notes and publish it.
 #
 #   ./Scripts/release.sh 1.2.0                     build and upload version 1.2.0
-#   ./Scripts/release.sh 1.2.0 --build 42          set the build number (default: git commit count)
+#   ./Scripts/release.sh 1.2.0 --build 42          set the build number (default: timestamp, always increasing)
 #   ./Scripts/release.sh 1.2.0 --notes "- Faster"  prefill the release notes
+#   ./Scripts/release.sh 1.2.0 --cv                also make 1.2.0 the app's default version (Scripts/build-app.sh)
 #   ./Scripts/release.sh 1.2.0 --skip-build        upload the existing build/BeatSnap.dmg
 #   ./Scripts/release.sh 1.2.0 --dmg other.dmg     upload a specific DMG (implies --skip-build)
 #   ./Scripts/release.sh 1.2.0 --min-os 26.0 --no-open
@@ -21,10 +22,11 @@ ENV_FILE="${BEATSNAP_WEB_ENV:-$ROOT/Scripts/web.env}"
 
 say() { printf "\033[1m==>\033[0m %s\n" "$1"; }
 die() { printf "\033[31merror:\033[0m %s\n" "$1" >&2; exit 1; }
-usage() { sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 VERSION=""
 BUILD_NUMBER=""
+CHANGE_VERSION=0
 NOTES=""
 MIN_OS="26.0"
 SKIP_BUILD=0
@@ -38,6 +40,7 @@ while [ "$#" -gt 0 ]; do
     --min-os) MIN_OS="${2:?--min-os needs a value}"; shift 2 ;;
     --dmg) DMG="${2:?--dmg needs a path}"; SKIP_BUILD=1; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
+    --cv) CHANGE_VERSION=1; shift ;;
     --no-open) OPEN_EDITOR=0; shift ;;
     -h|--help) usage ;;
     -*) echo "Unknown option: $1" >&2; usage ;;
@@ -47,8 +50,17 @@ done
 
 [ -n "$VERSION" ] || usage
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,3}(-[0-9A-Za-z.-]+)?$ ]] || die "“$VERSION” isn’t a version like 1.2.0 or 1.3.0-beta.1."
+if [ "$CHANGE_VERSION" -eq 1 ]; then
+  # Keep plain build-app.sh builds in step with the release. The build below already gets
+  # BEATSNAP_VERSION from this script, so this only changes the fallback default.
+  sed -i '' "s|BEATSNAP_VERSION:-[^}]*}|BEATSNAP_VERSION:-$VERSION}|" "$ROOT/Scripts/build-app.sh"
+  grep -q "BEATSNAP_VERSION:-$VERSION}" "$ROOT/Scripts/build-app.sh" || die "Couldn’t update the default version in Scripts/build-app.sh."
+  say "App default version set to $VERSION"
+fi
 if [ -z "$BUILD_NUMBER" ]; then
-  BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || date +%Y%m%d%H%M)"
+  # Sparkle only offers an update when this number is higher than the installed app's, and
+  # the git commit count doesn't change between uncommitted builds — so use a timestamp.
+  BUILD_NUMBER="$(date +%Y%m%d%H%M)"
 fi
 
 if [ -f "$ENV_FILE" ]; then
@@ -111,6 +123,13 @@ spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG
 
 # ---------------------------------------------------------------- upload
 
+# Sparkle verifies this EdDSA signature before installing, so the private key never leaves
+# this Mac's Keychain (created once by Scripts/sparkle-setup.sh).
+SIGN_UPDATE="$(find "$ROOT/.build/artifacts" -path '*/bin/sign_update' -not -path '*old_dsa*' | head -1)"
+[ -x "$SIGN_UPDATE" ] || die "Sparkle's sign_update tool is missing; run: swift package resolve"
+ED_SIGNATURE="$("$SIGN_UPDATE" -p "$DMG" 2>/dev/null)" \
+  || die "Couldn’t sign the DMG for automatic updates. Run ./Scripts/sparkle-setup.sh once to create the key."
+
 SIZE="$(stat -f%z "$DMG")"
 SHA256="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
 UPLOAD_ID="$(openssl rand -hex 16)"
@@ -136,7 +155,7 @@ echo
 
 say "Creating draft"
 api --form-string action=finish --form-string "upload_id=$UPLOAD_ID" \
-  --form-string "file_name=$(basename "$DMG")" --form-string "size=$SIZE" --form-string "sha256=$SHA256" \
+  --form-string "file_name=$(basename "$DMG")" --form-string "size=$SIZE" --form-string "sha256=$SHA256" --form-string "ed_signature=$ED_SIGNATURE" \
   --form-string "version=$VERSION" --form-string "build=$BUILD_NUMBER" --form-string "min_os=$MIN_OS" \
   --form-string "notes=$NOTES" "$API"
 [[ "$STATUS" = 200 || "$STATUS" = 201 ]] || die "The server rejected the build: $(api_error)"

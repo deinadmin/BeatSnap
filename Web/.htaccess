@@ -9,6 +9,8 @@ DirectoryIndex index.php
     RewriteRule (^|/)\.(?!well-known/) - [F,L]
     # Friendly link to the latest build: /download
     RewriteRule ^download/?$ download.php [L,QSA]
+    # Clean, extension-bearing URL for Sparkle: /downloads/BeatSnap-1.0.1.dmg
+    RewriteRule ^downloads/BeatSnap-(.+)\.dmg$ download.php?get=1&version=$1 [L,QSA]
 </IfModule>
 
 <IfModule mod_headers.c>

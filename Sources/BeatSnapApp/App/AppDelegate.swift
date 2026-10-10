@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }()
     private let preview = AudioPreview()
     private lazy var tools = ToolStatus(toasts: library.toasts)
-    private let updates = UpdateChecker()
+    private let updater = AppUpdater()
     private var statusItem: NSStatusItem?
     private var panel: BeatPanel?
     private var hotKey: GlobalHotKey?
@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showPanel()
 
         Task { await tools.updateIfDue() }
-        updates.start()
+        updater.start()
     }
 
     /// Closing the panel leaves the app alive in the menubar, still working through its queue.

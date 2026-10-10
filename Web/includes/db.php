@@ -76,6 +76,12 @@ function migrate(PDO $pdo): void
             PRAGMA user_version = 2;
             SQL);
     }
+
+    if ($version < 3) {
+        // Sparkle's EdDSA signature of the build, produced by Scripts/release.sh.
+        $pdo->exec('ALTER TABLE releases ADD COLUMN ed_signature TEXT');
+        $pdo->exec('PRAGMA user_version = 3');
+    }
 }
 
 function now(): string

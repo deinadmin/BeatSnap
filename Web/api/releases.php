@@ -9,7 +9,7 @@ require dirname(__DIR__) . '/includes/bootstrap.php';
  *
  * GET  ?version=1.2.0              → upload limits and whether that version already exists
  * POST action=chunk                → upload_id, offset, chunk (file): appends one piece of the build
- * POST action=finish               → upload_id, file_name, size, sha256, version, build, min_os, notes:
+ * POST action=finish               → upload_id, file_name, size, sha256, ed_signature, version, build, min_os, notes:
  *                                    verifies the assembled file and creates (or refreshes) a draft
  *
  * Chunks keep each request under the host's PHP upload limit, so large builds work anywhere.
@@ -151,6 +151,8 @@ switch ($_POST['action'] ?? '') {
             'external_url' => null,
             'file_size'    => (int) filesize(releases_dir() . '/' . $name),
             'sha256'       => $sha256,
+            'ed_signature' => preg_match('#^[A-Za-z0-9+/=]{40,200}$#', (string) ($_POST['ed_signature'] ?? ''))
+                ? $_POST['ed_signature'] : null,
             'is_published' => 0,
         ]);
         $id = release_save($record, $id);

@@ -61,6 +61,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'is_published' => empty($_POST['is_published']) ? 0 : 1,
         ]);
         $source = (string) ($_POST['source'] ?? 'keep');
+        $signature = trim((string) ($_POST['ed_signature'] ?? ''));
+        $signature = preg_match('#^[A-Za-z0-9+/=]{40,200}$#', $signature) ? $signature : null;
         $other = $form['version'] !== '' ? release_find_by_version($form['version']) : null;
         $file = $_FILES['file'] ?? null;
         $serverFiles = array_column(unattached_release_files(), 'name');
@@ -107,11 +109,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $fields['external_url'] = null;
                     $fields['file_size'] = (int) filesize($path);
                     $fields['sha256'] = hash_file('sha256', $path);
+                    $fields['ed_signature'] = $signature;
                 } elseif ($source === 'url') {
                     $fields['external_url'] = trim((string) $_POST['external_url']);
                     $fields['file_name'] = null;
                     $fields['file_size'] = null;
                     $fields['sha256'] = null;
+                    $fields['ed_signature'] = null;
+                } elseif ($source === 'keep' && $signature !== null) {
+                    $fields['ed_signature'] = $signature;
                 }
 
                 if ($fields['is_published'] && !release_is_downloadable($fields)) {
@@ -229,6 +235,15 @@ admin_header($title, $admin, 'releases');
             <input type="url" name="external_url" value="<?= e((string) ($form['external_url'] ?? '')) ?>" placeholder="https://example.com/BeatSnap-1.0.0.dmg" aria-label="Download link">
         </div>
     </section>
+
+    <h2 class="group-title">Automatic Updates</h2>
+    <section class="group">
+        <label class="row row--field">
+            <span>Sparkle signature</span>
+            <input name="ed_signature" value="<?= e((string) ($existing['ed_signature'] ?? '')) ?>" placeholder="Set automatically by release.sh" spellcheck="false" autocomplete="off">
+        </label>
+    </section>
+    <p class="group-footnote">The EdDSA signature that lets BeatSnap verify and install this build. Releases without one are left out of the update feed.</p>
 
     <h2 class="group-title">What’s New</h2>
     <section class="group">

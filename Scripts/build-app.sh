@@ -64,7 +64,7 @@ CONTENTS="$APP/Contents"
 RESOURCES="$CONTENTS/Resources"
 TOOLS="$RESOURCES/tools"
 
-APP_VERSION="${BEATSNAP_VERSION:-1.0.1}"
+APP_VERSION="${BEATSNAP_VERSION:-1.0.2}"
 APP_BUILD="${BEATSNAP_BUILD:-1}"
 
 YTDLP_VERSION="2026.07.04"
@@ -135,6 +135,24 @@ if [ -f "$ROOT/Resources/AppIcon.icns" ]; then
   cp "$ROOT/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 fi
 
+# Sparkle installs updates. The executable finds it through @executable_path/../Frameworks.
+SPARKLE_FRAMEWORK="$(find "$ROOT/.build/artifacts" -type d -name Sparkle.framework -path "*macos-arm64*" | head -1)"
+[ -n "$SPARKLE_FRAMEWORK" ] || { echo "Sparkle.framework not found; run swift package resolve" >&2; exit 1; }
+mkdir -p "$CONTENTS/Frameworks"
+ditto "$SPARKLE_FRAMEWORK" "$CONTENTS/Frameworks/Sparkle.framework"
+
+# Public half of the update signing key (Scripts/sparkle-setup.sh). Updates are refused
+# without it, so the build warns loudly when it is missing.
+SPARKLE_KEY_PLIST=""
+if [ -z "${BEATSNAP_SPARKLE_PUBLIC_KEY:-}" ] && [ -f "$ROOT/Scripts/web.env" ]; then
+  BEATSNAP_SPARKLE_PUBLIC_KEY="$(sed -n 's/^BEATSNAP_SPARKLE_PUBLIC_KEY=["'"'"']\{0,1\}\([^"'"'"']*\).*/\1/p' "$ROOT/Scripts/web.env" | head -1)"
+fi
+if [ -n "${BEATSNAP_SPARKLE_PUBLIC_KEY:-}" ]; then
+  SPARKLE_KEY_PLIST="<key>SUPublicEDKey</key><string>$BEATSNAP_SPARKLE_PUBLIC_KEY</string>"
+else
+  say "WARNING: BEATSNAP_SPARKLE_PUBLIC_KEY is not set — this build cannot install updates"
+fi
+
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -179,6 +197,12 @@ cat > "$CONTENTS/Info.plist" <<PLIST
             </array>
         </dict>
     </array>
+    <!-- Sparkle: check daily without the first-launch permission prompt. -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
+    $SPARKLE_KEY_PLIST
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
@@ -240,6 +264,13 @@ while IFS= read -r -d '' file; do
     fi
   fi
 done < "$WORK/native-files"
+
+# Sparkle's helpers, inside-out. Each must carry the same Developer ID signature as the app.
+SPARKLE_DIR="$CONTENTS/Frameworks/Sparkle.framework/Versions/B"
+for item in "$SPARKLE_DIR"/XPCServices/*.xpc "$SPARKLE_DIR/Autoupdate" "$SPARKLE_DIR/Updater.app"; do
+  [ -e "$item" ] && codesign "${SIGN_ARGS[@]}" "$item"
+done
+codesign "${SIGN_ARGS[@]}" "$CONTENTS/Frameworks/Sparkle.framework"
 
 xattr -cr "$APP"
 # Sign inside-out; --deep is for verification, not signing.

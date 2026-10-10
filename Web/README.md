@@ -7,6 +7,8 @@ build step, no Composer — upload the folder to any PHP host.
 - `download.php` (also `/download`) — always serves the highest published version.
   `?version=1.2.0` serves a specific published version.
 - `api/latest.php` — JSON metadata for the live version (for in-app update checks).
+- `appcast.php` — Sparkle update feed (newest published release that has an EdDSA signature).
+  The DMG is served to Sparkle at `/downloads/BeatSnap-<version>.dmg`.
 - `admin/` — releases dashboard, upload/edit/publish/delete, password change.
 
 ## Requirements
@@ -62,6 +64,7 @@ admin, the landing page shows a labelled placeholder for every missing image.
 location ~ ^/(includes|storage)/ { deny all; }
 location ~ /\.(?!well-known/) { deny all; }
 location = /download { rewrite ^ /download.php last; }
+location ~ ^/downloads/BeatSnap-(.+)\.dmg$ { rewrite ^ /download.php?get=1&version=$1 last; }
 client_max_body_size 520m;
 ```
 

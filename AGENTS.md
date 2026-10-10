@@ -108,6 +108,12 @@ errors, key 13/16 exact (15/16 including relative/fifth neighbours).
   breaking extractors. The bundled copy is only a floor; `Tools.updateYtDlpIfNeeded()`
   fetches newer zipapps into Application Support, deliberately *outside* the .app so the
   code signature stays valid. Never write updates into the bundle.
+- **Updates use Sparkle's standard UI.** `AppUpdater` wraps `SPUStandardUpdaterController`
+  (daily automatic checks, feed = `appcast.php`; `updateSiteURL` default overrides the site).
+  Sparkle compares `CFBundleVersion`, so build numbers must increase. The DMG must be
+  EdDSA-signed (`release.sh` via `sign_update`; key from `Scripts/sparkle-setup.sh`, public key
+  in `SUPublicEDKey`). Sparkle's helpers are signed inside-out in `build-app.sh`; the app needs
+  the `@executable_path/../Frameworks` rpath from `Package.swift`.
 - **Don't use the PyInstaller onefile `yt-dlp_macos`.** It re-extracts 38 MB to /tmp on
   every invocation: 3.3s per call versus 0.3s for the zipapp.
 - **Keep the playhead out of `BeatRowView`'s body.** The row reads only `isActive`/`isPlaying`

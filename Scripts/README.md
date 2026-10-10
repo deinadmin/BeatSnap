@@ -102,3 +102,28 @@ For an app, package the successfully stapled artifact with `create-dmg.sh`, sett
 `BEATSNAP_NOTARIZE=1` to sign and notarize the DMG. For a resumed DMG, upload it using
 `release.sh VERSION --dmg /path/to/BeatSnap.dmg`. Remove the retained temporary
 directory when finished.
+
+## Automatic updates (Sparkle)
+
+BeatSnap uses Sparkle's standard dialogs: it checks `appcast.php` daily, shows the release
+notes, downloads the DMG, verifies its EdDSA signature, replaces the app and relaunches.
+
+One-time setup:
+
+```sh
+./Scripts/sparkle-setup.sh
+```
+
+This creates (or reuses) the signing key in your login Keychain and writes the public key
+to `BEATSNAP_SPARKLE_PUBLIC_KEY` in `Scripts/web.env`; `build-app.sh` embeds it as
+`SUPublicEDKey`. Back up the private key — without it installed copies can never update:
+
+```sh
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x ~/Desktop/beatsnap-sparkle-key
+```
+
+`release.sh` signs each DMG with `sign_update` and uploads the signature; the site's
+`appcast.php` only lists releases that have one. The build number (`CFBundleVersion`)
+must increase with every release. Updates require a Developer ID–signed build installed
+in `/Applications`. The first Sparkle-enabled release only updates users from the next
+release onward.

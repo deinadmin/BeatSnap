@@ -100,7 +100,7 @@ function release_download_name(array $release): string
 function release_save(array $fields, ?int $id = null): int
 {
     $columns = ['version', 'build', 'notes', 'min_os', 'file_name', 'external_url',
-                'file_size', 'sha256', 'is_published', 'released_at'];
+                'file_size', 'sha256', 'ed_signature', 'is_published', 'released_at'];
     $values = array_intersect_key($fields, array_flip($columns));
     $values['updated_at'] = now();
 
