@@ -153,6 +153,9 @@ struct LicenseTests {
     }
 
     @MainActor @Test func activationOfflineRestartRevocationAndRemoval() async throws {
+        let suite = "BeatSnap-upgrade-test-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
         let fixture = try fixture()
         var payload = payload()
         payload["SignDate"] = Date().timeIntervalSince1970
@@ -170,14 +173,22 @@ struct LicenseTests {
             else { body = response }
             return (body, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
-        let service = LicenseService(makeClient: { client }, machine: { "mac" }, persistence: storage, allowsTestLicense: false)
+        let service = LicenseService(makeClient: { client }, machine: { "mac" }, persistence: storage, allowsTestLicense: false, testDefaults: defaults)
         #expect(!service.isLicensed)
+        service.enterTrialMode()
+        #expect(service.isLicensed && service.isTrialMode)
+        mode = "blocked"
+        await service.activate("TEST-KEY")
+        #expect(service.isLicensed && service.isTrialMode)
+        #expect(service.message != nil)
+        mode = "valid"
         await service.activate("  test-key  ")
+        #expect(!service.isTrialMode)
         #expect(service.isLicensed)
         #expect(saved?.key == "TEST-KEY")
         mode = "offline"
-        let restarted = LicenseService(makeClient: { client }, machine: { "mac" }, persistence: storage, allowsTestLicense: false)
-        #expect(restarted.isLicensed)
+        let restarted = LicenseService(makeClient: { client }, machine: { "mac" }, persistence: storage, allowsTestLicense: false, testDefaults: defaults)
+        #expect(restarted.isLicensed && !restarted.isTrialMode)
         await restarted.refresh()
         #expect(restarted.isLicensed)
         await restarted.removeLicense()
@@ -187,7 +198,7 @@ struct LicenseTests {
         await restarted.refresh()
         #expect(!restarted.isLicensed)
         #expect(saved == nil)
-        let afterRejection = LicenseService(makeClient: { client }, machine: { "mac" }, persistence: storage, allowsTestLicense: false)
+        let afterRejection = LicenseService(makeClient: { client }, machine: { "mac" }, persistence: storage, allowsTestLicense: false, testDefaults: defaults)
         #expect(!afterRejection.isLicensed)
         mode = "valid"
         await afterRejection.activate("TEST-KEY")
@@ -232,7 +243,7 @@ struct LicenseTests {
         #expect(!service(enabled: true).isLicensed)
     }
 
-    @MainActor @Test func trialTestKeyPersistsSwitchesAndRemovesWithoutNetwork() async throws {
+    @MainActor @Test func keylessTrialPersistsSwitchesAndRemovesWithoutNetwork() async throws {
         let suite = "BeatSnap-trial-test-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -247,21 +258,20 @@ struct LicenseTests {
         let trial = service()
         var notifications = 0
         trial.onAccessChanged = { _ in notifications += 1 }
-        await trial.activate("  trial  ")
-        #expect(trial.isLicensed && trial.isTestLicense && trial.isTrialMode)
+        trial.enterTrialMode()
+        #expect(trial.isLicensed && !trial.isTestLicense && trial.isTrialMode)
         #expect(notifications == 1)
         let restart = service()
         #expect(restart.isLicensed && restart.isTrialMode)
         await restart.refresh()
         #expect(restart.isTrialMode)
         let production = service(enabled: false)
-        await production.activate("TRIAL")
-        #expect(!production.isLicensed && !production.isTrialMode)
-        #expect(production.message != nil)
+        #expect(production.isLicensed && production.isTrialMode)
+        await production.refresh()
         await restart.activate("CARLO")
         #expect(restart.isLicensed && !restart.isTrialMode)
         #expect(!service().isTrialMode)
-        await restart.activate("TRIAL")
+        restart.enterTrialMode()
         #expect(service().isTrialMode)
         await restart.removeLicense()
         #expect(!restart.isLicensed && !restart.isTrialMode)

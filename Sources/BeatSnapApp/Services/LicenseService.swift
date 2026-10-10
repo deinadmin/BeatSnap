@@ -220,7 +220,8 @@ final class LicenseService {
     private static let testActivationPreference = "BeatSnapCARLOTestLicense"
     private static let trialTestActivationPreference = "BeatSnapTRIALTestLicense"
     private(set) var isTestLicense = false
-    private var isTrialTestLicense = false
+    private var hasChosenTrial = false
+    private static let trialPreference = "BeatSnapTrialMode"
     @ObservationIgnored private let allowsTestLicense: Bool
     @ObservationIgnored private let testDefaults: UserDefaults
     private(set) var certificate: LicenseCertificate?
@@ -235,9 +236,9 @@ final class LicenseService {
     @ObservationIgnored private var lastCheck = Date.distantPast
     @ObservationIgnored var onAccessChanged: ((Bool) -> Void)?
 
-    var isTrialMode: Bool { isTestLicense ? isTrialTestLicense : certificate?.trialFeature == true }
+    var isTrialMode: Bool { hasChosenTrial || certificate?.trialFeature == true }
 
-    var isLicensed: Bool { isTestLicense || (certificate.map { $0.usableUntil > now && $0.usableUntil > Date() } ?? false) }
+    var isLicensed: Bool { hasChosenTrial || isTestLicense || (certificate.map { $0.usableUntil > now && $0.usableUntil > Date() } ?? false) }
 
     init(
         makeClient: @escaping () throws -> CryptolensClient = { CryptolensClient(configuration: try .bundled()) },
@@ -251,9 +252,13 @@ final class LicenseService {
         self.makeClient = makeClient
         self.machine = machine
         self.persistence = persistence
-        if allowsTestLicense && (testDefaults.bool(forKey: Self.testActivationPreference)
-                                 || testDefaults.bool(forKey: Self.trialTestActivationPreference)) {
-            isTrialTestLicense = testDefaults.bool(forKey: Self.trialTestActivationPreference)
+        hasChosenTrial = testDefaults.bool(forKey: Self.trialPreference)
+            || testDefaults.bool(forKey: Self.trialTestActivationPreference)
+        if hasChosenTrial {
+            testDefaults.set(true, forKey: Self.trialPreference)
+            return
+        }
+        if allowsTestLicense && testDefaults.bool(forKey: Self.testActivationPreference) {
             isTestLicense = true
             return
         }
@@ -285,16 +290,15 @@ final class LicenseService {
     func activate(_ input: String) async {
         let key = input.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !isBusy, !key.isEmpty else { return }
-        if key == "CARLO" || key == "TRIAL" {
+        if key == "CARLO" {
             guard allowsTestLicense else {
-                message = key == "CARLO"
-                    ? "Thanks for trying out my name! But I only accept real license codes."
-                    : "Test keys are not enabled in this build. Please enter a real license code."
+                message = "Thanks for trying out my name! But I only accept real license codes."
                 return
             }
-            isTrialTestLicense = key == "TRIAL"
-            testDefaults.set(!isTrialTestLicense, forKey: Self.testActivationPreference)
-            testDefaults.set(isTrialTestLicense, forKey: Self.trialTestActivationPreference)
+            hasChosenTrial = false
+            testDefaults.removeObject(forKey: Self.trialPreference)
+            testDefaults.removeObject(forKey: Self.trialTestActivationPreference)
+            testDefaults.set(true, forKey: Self.testActivationPreference)
             isTestLicense = true
             certificate = nil
             message = nil
@@ -304,8 +308,19 @@ final class LicenseService {
         await check(key: key, isRefresh: false)
     }
 
+    func enterTrialMode() {
+        guard !isBusy else { return }
+        hasChosenTrial = true
+        isTestLicense = false
+        certificate = nil
+        testDefaults.set(true, forKey: Self.trialPreference)
+        testDefaults.removeObject(forKey: Self.testActivationPreference)
+        message = nil
+        onAccessChanged?(true)
+    }
+
     func refresh() async {
-        guard !isTestLicense, !isBusy, let receipt else { return }
+        guard !hasChosenTrial, !isTestLicense, !isBusy, let receipt else { return }
         await check(key: receipt.key, isRefresh: true)
     }
 
@@ -324,7 +339,8 @@ final class LicenseService {
             self.receipt = receipt
             self.certificate = certificate
             isTestLicense = false
-            isTrialTestLicense = false
+            hasChosenTrial = false
+            testDefaults.removeObject(forKey: Self.trialPreference)
             testDefaults.removeObject(forKey: Self.testActivationPreference)
             testDefaults.removeObject(forKey: Self.trialTestActivationPreference)
         } catch LicenseError.unavailable {
@@ -341,10 +357,11 @@ final class LicenseService {
     }
 
     func removeLicense() async {
-        if isTestLicense {
+        if hasChosenTrial || isTestLicense {
             testDefaults.removeObject(forKey: Self.testActivationPreference)
             testDefaults.removeObject(forKey: Self.trialTestActivationPreference)
-            isTrialTestLicense = false
+            hasChosenTrial = false
+            testDefaults.removeObject(forKey: Self.trialPreference)
             isTestLicense = false
             message = nil
             onAccessChanged?(isLicensed)

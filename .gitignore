@@ -18,3 +18,6 @@ Scripts/.cache/
 AGENTS.md
 # Local Cryptolens client configuration
 Configuration/Cryptolens.plist
+
+# Website deploy/release credentials
+Scripts/web.env

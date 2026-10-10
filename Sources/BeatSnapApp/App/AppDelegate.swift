@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }()
     private let preview = AudioPreview()
     private lazy var tools = ToolStatus(toasts: library.toasts)
+    private let updates = UpdateChecker()
     private var statusItem: NSStatusItem?
     private var panel: BeatPanel?
     private var hotKey: GlobalHotKey?
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showPanel()
 
         Task { await tools.updateIfDue() }
+        updates.start()
     }
 
     /// Closing the panel leaves the app alive in the menubar, still working through its queue.
@@ -320,7 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func togglePanel() {
         guard !isRecordingShortcut else { return }
         guard let panel else { return }
-        if panel.isVisible && panel.isKeyWindow {
+        // A pinned panel remains visible while another app has focus.
+        if panel.isVisible && (panel.isKeyWindow || panel.isFloatingPanel) {
             panel.orderOut(nil)
         } else {
             showPanel()

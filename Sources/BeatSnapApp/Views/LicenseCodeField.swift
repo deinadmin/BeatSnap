@@ -17,7 +17,7 @@ struct LicenseCodeField: NSViewRepresentable {
         field.drawsBackground = false
         field.focusRingType = .none
         field.alignment = .center
-        field.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        field.font = .systemFont(ofSize: 13, weight: .semibold)
         field.placeholderString = LicenseCodeInput.placeholder
         field.cell?.usesSingleLineMode = true
         field.setAccessibilityLabel("License code")

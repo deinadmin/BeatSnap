@@ -1,11 +1,53 @@
 #!/bin/bash
 #
 # Assemble BeatSnap.app: build the Swift executable, bundle the command-line tools it needs
-# (Python + yt-dlp + ffmpeg), write Info.plist, ad-hoc sign, and create the installer DMG.
+# (Python + yt-dlp + ffmpeg), write Info.plist, and sign.
+# Pass --dmg to create the installer DMG; --notarize enables Developer ID distribution.
 #
 # The downloaded tools are cached in Scripts/.cache so repeat builds stay fast.
 
 set -euo pipefail
+
+CREATE_DMG=0
+NOTARIZE=0
+for option in "$@"; do
+  case "$option" in
+    --dmg) CREATE_DMG=1 ;;
+    --notarize) NOTARIZE=1 ;;
+    *) echo "Usage: $0 [--dmg] [--notarize]" >&2; exit 2 ;;
+  esac
+done
+if [ "$NOTARIZE" = 1 ]; then
+  : "${BEATSNAP_SIGNING_IDENTITY:?Set BEATSNAP_SIGNING_IDENTITY to your Developer ID Application certificate name}"
+  : "${BEATSNAP_NOTARY_PROFILE:?Set BEATSNAP_NOTARY_PROFILE to a notarytool Keychain profile}"
+  [[ "$BEATSNAP_SIGNING_IDENTITY" == "Developer ID Application: "* ]] || {
+    echo "Notarization requires a Developer ID Application identity." >&2; exit 1;
+  }
+  [ "${BEATSNAP_ENABLE_TEST_LICENSE:-0}" != 1 ] || {
+    echo "Cannot notarize a build with test licenses enabled." >&2; exit 1;
+  }
+  # Fail before compiling if the certificate/private key or credentials are missing.
+  echo "==> Checking Developer ID signing identity"
+  if ! IDENTITIES="$(security find-identity -v -p codesigning 2>&1)"; then
+    printf 'Could not read signing identities from Keychain:\n%s\n' "$IDENTITIES" >&2
+    exit 1
+  fi
+  if ! grep -F "\"$BEATSNAP_SIGNING_IDENTITY\"" <<< "$IDENTITIES" >/dev/null; then
+    printf 'Signing identity not found: %s\n\nAvailable valid signing identities:\n%s\n\n' \
+      "$BEATSNAP_SIGNING_IDENTITY" "$IDENTITIES" >&2
+    echo 'Set BEATSNAP_SIGNING_IDENTITY to the exact Developer ID Application name shown above.' >&2
+    echo 'If none are listed, check that the certificate and its private key are installed in an unlocked Keychain.' >&2
+    echo 'In Keychain Access, look under My Certificates; the certificate should expand to show its private key.' >&2
+    exit 1
+  fi
+  echo "==> Checking notarization Keychain profile"
+  if ! NOTARY_CHECK="$(xcrun notarytool history --keychain-profile "$BEATSNAP_NOTARY_PROFILE" 2>&1)"; then
+    printf 'Notarization profile check failed for "%s":\n%s\n' \
+      "$BEATSNAP_NOTARY_PROFILE" "$NOTARY_CHECK" >&2
+    echo 'Check the profile name, Keychain access, Apple credentials, and network connection.' >&2
+    exit 1
+  fi
+fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="$ROOT/Scripts/.cache"
@@ -21,6 +63,9 @@ APP="$WORK/$(basename "$OUTPUT_APP")"
 CONTENTS="$APP/Contents"
 RESOURCES="$CONTENTS/Resources"
 TOOLS="$RESOURCES/tools"
+
+APP_VERSION="${BEATSNAP_VERSION:-1.0.1}"
+APP_BUILD="${BEATSNAP_BUILD:-1}"
 
 YTDLP_VERSION="2026.07.04"
 PYTHON_RELEASE="20260718"
@@ -106,9 +151,9 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$APP_BUILD</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
@@ -153,7 +198,13 @@ fi
 
 # ---------------------------------------------------------------- sign
 
-say "Ad-hoc signing"
+SIGN_ARGS=(--force --sign - --timestamp=none)
+if [ "$NOTARIZE" = 1 ]; then
+  say "Signing with $BEATSNAP_SIGNING_IDENTITY"
+  SIGN_ARGS=(--force --sign "$BEATSNAP_SIGNING_IDENTITY" --timestamp --options runtime)
+else
+  say "Ad-hoc signing"
+fi
 # Files copied from Finder-managed/downloaded locations can carry resource forks,
 # FinderInfo, quarantine or provenance metadata. codesign rejects bundles containing
 # those extended attributes, so strip them from the freshly assembled copy only. The
@@ -178,22 +229,37 @@ cat > "$ENTITLEMENTS" <<ENT
 </plist>
 ENT
 
-find "$TOOLS" -type f \( -perm -u+x -o -name "*.dylib" -o -name "*.so" \) -print0 \
-  | while IFS= read -r -d '' file; do
-      if file "$file" | grep -q "Mach-O"; then
-        codesign --force --sign - --timestamp=none \
-          --entitlements "$ENTITLEMENTS" "$file" 2>/dev/null || true
-      fi
-    done
+# Inspect every regular file, including native libraries without executable bits.
+find "$TOOLS" -type f -print0 > "$WORK/native-files"
+while IFS= read -r -d '' file; do
+  if file "$file" | grep -q "Mach-O"; then
+    if [[ "$file" == "$TOOLS/python/bin/"* ]]; then
+      codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" "$file"
+    else
+      codesign "${SIGN_ARGS[@]}" "$file"
+    fi
+  fi
+done < "$WORK/native-files"
 
 xattr -cr "$APP"
-codesign --force --deep --sign - --timestamp=none \
-  --entitlements "$ENTITLEMENTS" "$APP"
+# Sign inside-out; --deep is for verification, not signing.
+codesign "${SIGN_ARGS[@]}" "$APP"
 rm -f "$ENTITLEMENTS"
 
 say "Verifying"
 codesign --verify --deep --strict "$APP"
 echo "  signature ok"
+
+if [ "$NOTARIZE" = 1 ]; then
+  say "Notarizing app"
+  if ! "$ROOT/Scripts/notarize.sh" "$APP"; then
+    # Keep the signed bytes so a pending submission can be resumed without rebuilding.
+    trap - EXIT
+    printf 'Notarization did not complete. Signed app retained at: %s\n' "$APP" >&2
+    printf 'Temporary build retained at: %s\n' "$WORK" >&2
+    exit 1
+  fi
+fi
 
 # Publish only the verified bundle. Do not copy resource forks or extended attributes.
 mkdir -p "$(dirname "$OUTPUT_APP")"
@@ -207,10 +273,9 @@ xattr -cr "$VERIFY_APP"
 codesign --verify --deep --strict "$VERIFY_APP"
 
 # ---------------------------------------------------------------- installer
-# Set BEATSNAP_SKIP_DMG=1 for app-only development builds.
-if [ "${BEATSNAP_SKIP_DMG:-0}" != "1" ]; then
+if [ "$CREATE_DMG" -eq 1 ]; then
   say "Creating drag-to-install DMG"
-  "$ROOT/Scripts/create-dmg.sh" "$OUTPUT_APP"
+  BEATSNAP_NOTARIZE="$NOTARIZE" "$ROOT/Scripts/create-dmg.sh" "$OUTPUT_APP"
 fi
 
 SIZE="$(du -sh "$OUTPUT_APP" | cut -f1)"

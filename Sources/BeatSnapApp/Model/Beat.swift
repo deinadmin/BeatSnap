@@ -66,6 +66,16 @@ struct BeatKey: Hashable {
         self.init(tonic: String(parts[0]), mode: mode)
     }
 
+    /// The key sharing this key's notes: a minor third below a major key (C major → A minor),
+    /// a minor third above a minor key (A minor → C major). `tonics` is chromatic from A.
+    var relative: BeatKey {
+        let tonics = Self.tonics
+        let index = tonics.firstIndex(of: tonic) ?? 0
+        let shift = mode == .major ? -3 : 3
+        return BeatKey(tonic: tonics[(index + shift + tonics.count) % tonics.count],
+                       mode: mode == .major ? .minor : .major)
+    }
+
     var displayName: String { "\(tonic) \(mode.rawValue)" }
     var filenameName: String { "\(tonic)\(mode.filenameSuffix)" }
 }

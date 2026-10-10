@@ -1,0 +1,16 @@
+services:
+  web:
+    build: docker
+    container_name: beatsnap-web
+    ports:
+      - "8088:80"
+    environment:
+      BEATSNAP_CONFIG: /etc/beatsnap/config.php
+    volumes:
+      - .:/var/www/html
+      - ./docker/config.dev.php:/etc/beatsnap/config.php:ro
+      - storage:/var/beatsnap-storage
+    restart: unless-stopped
+
+volumes:
+  storage:

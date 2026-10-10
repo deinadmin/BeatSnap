@@ -4,7 +4,8 @@ enum BeatTransportState: Equatable {
 
     static func resolve(isActive: Bool, isPending: Bool, isDownloading: Bool, hasError: Bool) -> Self {
         if isActive { return .playback }
-        if isDownloading { return .downloading }
+        // Editing and exporting can also download a beat without requesting playback.
+        if isPending && isDownloading { return .downloading }
         if hasError { return .failed }
         if isPending { return .preparing }
         return .idle

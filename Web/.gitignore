@@ -1,0 +1,6 @@
+includes/config.local.php
+storage/*
+!storage/.htaccess
+!storage/releases/
+storage/releases/*
+!storage/releases/.gitkeep

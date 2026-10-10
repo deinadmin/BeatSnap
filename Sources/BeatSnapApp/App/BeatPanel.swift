@@ -27,6 +27,8 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         titlebarAppearsTransparent = true
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
+        isOpaque = false
+        backgroundColor = .clear
 
         // Deliberately NOT movable by background: that makes every pixel of the window a
         // drag handle, which swallows the mouse-down before a beat row can start its own
@@ -68,6 +70,10 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         effect.translatesAutoresizingMaskIntoConstraints = false
 
         let hosting = NSHostingView(rootView: AnyView(content))
+        // Start at the panel's real size, rather than exposing the hosting view's
+        // temporary fitting size while SwiftUI creates its materials and controls.
+        effect.frame = NSRect(origin: .zero, size: contentLayoutRect.size)
+        hosting.frame = effect.bounds
         hosting.translatesAutoresizingMaskIntoConstraints = false
         // With .fullSizeContentView the content spans the whole window, but SwiftUI would
         // still inset it below the titlebar. Drop the safe area so the header can sit
@@ -82,8 +88,6 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
         ])
 
         contentView = effect
-        isOpaque = false
-        backgroundColor = .clear
 
         center()
         // Despite what the name suggests, this both saves *and* restores: if a frame was
@@ -109,6 +113,29 @@ final class BeatPanel: NSPanel, NSDraggingDestination {
     func setKeepOnTop(_ enabled: Bool) {
         isFloatingPanel = enabled
         level = enabled ? .floating : .normal
+    }
+
+    override func fieldEditor(_ createFlag: Bool, for object: Any?) -> NSText? {
+        let editor = super.fieldEditor(createFlag, for: object)
+        // AppKit attaches this separate view when a text field becomes first responder.
+        // Configure it before attachment, not in textDidBeginEditing: its default opaque
+        // background can otherwise flash at the editor's temporary frame during focus.
+        if let textView = editor as? NSTextView {
+            textView.drawsBackground = false
+            textView.backgroundColor = .clear
+        }
+        return editor
+    }
+
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        // Resolve the restored window size and render the initial SwiftUI hierarchy
+        // before ordering it on screen, including the activation card's native field.
+        if !isVisible {
+            contentView?.superview?.layoutSubtreeIfNeeded()
+            contentView?.layoutSubtreeIfNeeded()
+            displayIfNeeded()
+        }
+        super.makeKeyAndOrderFront(sender)
     }
 
     /// Handle Finder files before a focused SwiftUI text field can paste their names.

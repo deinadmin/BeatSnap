@@ -342,9 +342,12 @@ private struct BeatPreviewControl: View {
     @Environment(AudioPreview.self) private var preview
 
     var body: some View {
+        // The tile indicates every download; the transport bar is playback-only.
+        let isDownloading = library.downloads.transfers[beat.filePath]?.isDownloading == true
+            || state == .downloading
         PreviewTile(isActive: preview.isActive(beat), isPlaying: preview.isPlaying(beat),
-                    needsDownload: beat.needsDownload, isBusy: state.isBusy,
-                    isDownloading: state == .downloading) {
+                    needsDownload: beat.needsDownload, isBusy: state.isBusy || isDownloading,
+                    isDownloading: isDownloading) {
             preview.toggle(beat, library: library)
         }
     }

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Decorative previews only: no playback, drag, download, or editing controls.
+/// Decorative beat previews with an action to activate the full library.
 struct TrialLibraryPreview: View {
     let beats: [Beat]
+    let onActivation: () -> Void
 
     var body: some View {
         ZStack {
@@ -19,15 +20,18 @@ struct TrialLibraryPreview: View {
                                startPoint: .top, endPoint: .bottom)
             }
             .accessibilityHidden(true)
+            .allowsHitTesting(false)
 
             VStack(spacing: 7) {
                 Text("BeatSnap is in Trial Mode")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
-                Text("Provide a full license to view all of your beats and enjoy unlimited downloads.")
+                Text("Provide a license key to view all of your beats and enjoy unlimited downloads.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                AccentButton(title: "Activate BeatSnap", action: onActivation)
+                    .padding(.top, 5)
             }
             .multilineTextAlignment(.center)
             .padding(18)
@@ -39,11 +43,10 @@ struct TrialLibraryPreview: View {
             }
             .shadow(color: .black.opacity(0.1), radius: 12, y: 4)
             .padding(.horizontal, 12)
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .contain)
         }
         .padding(.top, 4)
         .padding(.bottom, 8)
-        .allowsHitTesting(false)
     }
 
     private func previewRow(_ beat: Beat?) -> some View {

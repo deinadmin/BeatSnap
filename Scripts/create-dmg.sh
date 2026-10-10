@@ -95,6 +95,15 @@ MOUNTED=0
 hdiutil convert -quiet "$WORK/writable.dmg" -format UDZO -imagekey zlib-level=9 \
   -o "$WORK/BeatSnap.dmg"
 hdiutil verify -quiet "$WORK/BeatSnap.dmg"
+if [ "${BEATSNAP_NOTARIZE:-0}" = 1 ]; then
+  : "${BEATSNAP_SIGNING_IDENTITY:?Developer ID Application identity required}"
+  codesign --force --sign "$BEATSNAP_SIGNING_IDENTITY" --timestamp "$WORK/BeatSnap.dmg"
+  if ! "$ROOT/Scripts/notarize.sh" "$WORK/BeatSnap.dmg"; then
+    trap - EXIT
+    printf 'Notarization did not complete. Signed DMG retained at: %s\n' "$WORK/BeatSnap.dmg" >&2
+    exit 1
+  fi
+fi
 # Keep any previous installer until packaging and verification have succeeded.
 mv -f "$WORK/BeatSnap.dmg" "$DMG"
 printf 'DMG ready: %s\n' "$DMG"

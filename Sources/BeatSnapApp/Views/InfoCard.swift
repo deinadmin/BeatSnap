@@ -23,6 +23,7 @@ struct InfoCard: View {
     let onKeepOnTopChanged: (Bool) -> Void
     let onShortcutChanged: (WindowShortcut) -> Bool
     let onShortcutRecordingChanged: (Bool) -> Void
+    let onActivationRequested: () -> Void
     let onActivated: () async -> Void
     let dismiss: () -> Void
 
@@ -50,7 +51,7 @@ struct InfoCard: View {
         ZStack {
             // Same treatment as the drop overlay: blur the interface behind rather than dim
             // it. A click outside the card closes settings; activation stays up until a
-            // license is entered.
+            // license is entered or trial mode is chosen.
             Rectangle()
                 .fill(.thinMaterial)
                 .contentShape(Rectangle())
@@ -76,11 +77,8 @@ struct InfoCard: View {
         .coordinateSpace(.named("infoBackdrop"))
         .task(id: screen) {
             if screen == .information { await tools.loadVersions() }
-            else if screen == .activation {
-                try? await Task.sleep(for: .seconds(reduceMotion ? 0.15 : 0.5))
-                guard !Task.isCancelled else { return }
-                licenseFieldFocused = true
-            }
+            // Let native clicks/keyboard navigation focus the license field. Delayed
+            // autofocus attaches a field editor after the glass card is already visible.
         }
         .onChange(of: license.isLicensed) { _, licensed in
             if !licensed { stopRecordingShortcut() }
@@ -149,21 +147,45 @@ struct InfoCard: View {
     }
 
     private var activation: some View {
-        VStack(spacing: 12) {
-            LicenseCodeField(text: $licenseCode, isFocused: $licenseFieldFocused,
-                             isEnabled: !license.isLicensed && !license.isBusy, onSubmit: activate)
-                .frame(height: 16)
-                .padding(10)
-                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
-                .accessibilityLabel("License code")
-            AccentButton(
-                title: isActivating || license.isBusy ? "Verifying…" : "Activate BeatSnap",
-                isBusy: isActivating || license.isBusy,
-                isEnabled: !isActivating && !license.isBusy && LicenseCodeInput.isComplete(licenseCode),
-                action: activate
-            )
+        VStack(spacing: 0) {
+            VStack(spacing: 12) {
+                LicenseCodeField(text: $licenseCode, isFocused: $licenseFieldFocused,
+                                 isEnabled: (!license.isLicensed || license.isTrialMode) && !license.isBusy, onSubmit: activate)
+                    .frame(height: 16)
+                    .padding(.horizontal, 12)
+                    // Match the buttons' 8pt label padding plus 4pt native glass inset.
+                    .padding(.vertical, 12)
+                    .background(.quaternary.opacity(0.55), in: Capsule())
+                    .accessibilityLabel("License code")
+                AccentButton(
+                    title: isActivating || license.isBusy ? "Verifying…" : "Activate BeatSnap",
+                    isBusy: isActivating || license.isBusy,
+                    isEnabled: !isActivating && !license.isBusy && LicenseCodeInput.isComplete(licenseCode),
+                    action: activate,
+                    isBig: true
+                )
+            }
+            .padding(Self.sectionInset)
+
+            Divider().opacity(0.6)
+
+            Button {
+                license.enterTrialMode()
+                licenseFieldFocused = false
+                toasts.clear()
+                Task { await onActivated() }
+            } label: {
+                Text("Try BeatSnap")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .disabled(isActivating || license.isBusy)
+            .accessibilityHint("Try BeatSnap without a license key, with up to 10 beats in your library.")
+            .padding(Self.sectionInset)
         }
-        .padding(Self.sectionInset)
     }
 
     private var welcome: some View {
@@ -204,7 +226,7 @@ struct InfoCard: View {
         Task {
             defer { isActivating = false }
             await license.activate(licenseCode)
-            if license.isLicensed {
+            if license.isLicensed && license.message == nil {
                 licenseFieldFocused = false
                 toasts.clear()
                 await onActivated()
@@ -221,22 +243,31 @@ struct InfoCard: View {
     private var licenseInformation: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("License")
+                Text(license.isTrialMode ? "Trial Mode" : "License")
                     .font(.system(size: 12.5, weight: .medium))
                 Spacer(minLength: 0)
-                licensePreview
-            }
-            HStack(spacing: 8) {
-                licenseExpiry
-                Spacer(minLength: 2)
-                Button(license.isBusy ? "Please wait…" : "Remove License", role: .destructive) {
-                    confirmingLicenseRemoval = true
+                if license.isTrialMode {
+                    Button("Activate BeatSnap", action: onActivationRequested)
+                        .controlSize(.small)
+                        .disabled(license.isBusy)
+                        .fixedSize(horizontal: true, vertical: false)
+                } else {
+                    licensePreview
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(license.isBusy)
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(1)
+            }
+            if !license.isTrialMode {
+                HStack(spacing: 8) {
+                    licenseExpiry
+                    Spacer(minLength: 2)
+                    Button(license.isBusy ? "Please wait…" : "Remove License", role: .destructive) {
+                        confirmingLicenseRemoval = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(license.isBusy)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+                }
             }
             licenseMessage
         }
@@ -248,7 +279,7 @@ struct InfoCard: View {
     @ViewBuilder
     private var licensePreview: some View {
         if license.isTestLicense {
-            Text("XXXXX–XXXXX–XXXXX–XXXXX–" + (license.isTrialMode ? "TRIAL" : "CARLO"))
+            Text("XXXXX–XXXXX–XXXXX–XXXXX–CARLO")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
         } else if let certificate = license.certificate {
@@ -261,7 +292,7 @@ struct InfoCard: View {
     @ViewBuilder
     private var licenseExpiry: some View {
         if license.isTestLicense {
-            Text(license.isTrialMode ? "Trial test license (10 beats)" : "Test license (No expiry)")
+            Text("Test license (No expiry)")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
         } else if let certificate = license.certificate {

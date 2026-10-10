@@ -293,7 +293,7 @@ final class BeatLibrary {
         let count = max(folderEntries.count, beats.count) + (includeQueue ? pendingCount : 0)
         guard count < Self.trialBeatLimit else {
             toasts.show(.info, title: "BeatSnap is in Trial Mode",
-                        message: "Provide a full license to have more than 10 beats in your library.")
+                        message: "Provide a license key to have more than 10 beats in your library.")
             return false
         }
         return true

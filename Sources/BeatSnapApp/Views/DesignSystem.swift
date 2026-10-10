@@ -89,21 +89,38 @@ struct AccentButton: View {
     var isBusy = false
     var isEnabled = true
     let action: () -> Void
+    var isBig = false
+
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.7)
-                        .frame(width: 12, height: 12)
+            if isBig {
+                HStack(spacing: 6) {
+                    if isBusy {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 12, height: 12)
+                    }
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
                 }
-                Text(title)
-                    .font(.system(size: 12.5, weight: .semibold))
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+            } else {
+                HStack(spacing: 6) {
+                    if isBusy {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 12, height: 12)
+                    }
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
         }
         .buttonStyle(.glassProminent)
         .buttonBorderShape(.capsule)

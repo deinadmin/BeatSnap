@@ -1,0 +1,34 @@
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Private code and data are never served directly.
+    RewriteRule ^(includes|storage|docker)(/|$) - [F,L]
+    RewriteRule ^(compose\.yaml|README\.md)$ - [F,L]
+    RewriteRule (^|/)\.(?!well-known/) - [F,L]
+    # Friendly link to the latest build: /download
+    RewriteRule ^download/?$ download.php [L,QSA]
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+</IfModule>
+
+# Upload limits for Apache mod_php hosts (PHP-FPM hosts read .user.ini instead).
+<IfModule mod_php.c>
+    php_value upload_max_filesize 512M
+    php_value post_max_size 520M
+    php_value max_execution_time 300
+    php_value max_input_time 300
+</IfModule>
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 year"
+    ExpiresByType application/javascript "access plus 1 year"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/svg+xml "access plus 1 month"
+</IfModule>

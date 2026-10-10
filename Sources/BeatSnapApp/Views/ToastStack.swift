@@ -183,15 +183,21 @@ private struct ToastCard: View {
     private var shape: ConcentricRectangle { .init(corners: .concentric(minimum: .fixed(10))) }
 
     // An explicit color avoids hierarchical secondary styling being dimmed again
-    // by the glass material over the black dark-mode surface.
+    // by the glass material over the dark-mode surface.
     private var secondaryTextColor: Color {
         colorScheme == .dark ? Color(white: 0.85) : .secondary
+    }
+
+    private var surfaceColor: Color {
+        colorScheme == .dark
+            ? Color(red: 38 / 255.0, green: 38 / 255.0, blue: 40 / 255.0)
+            : .white
     }
 
     private var tint: Color {
         switch toast.kind {
         case .error: Color(red: 0.88, green: 0.12, blue: 0.19)
-        case .info: Color(red: 0.04, green: 0.36, blue: 0.96)
+        case .info: Design.bpmTint
         case .success: Color(red: 0.05, green: 0.58, blue: 0.34)
         }
     }
@@ -237,12 +243,12 @@ private struct ToastCard: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint(colorScheme == .dark ? .black.opacity(0.8) : .white.opacity(0.8)), in: shape)
+        .glassEffect(.regular.tint(surfaceColor.opacity(0.8)), in: shape)
         .background {
-            shape.fill(colorScheme == .dark ? Color.black : Color.white)
+            shape.fill(surfaceColor)
         }
         .overlay {
-            shape.stroke(colorScheme == .dark ? Color.white.opacity(0.22) : Color.black.opacity(0.16),
+            shape.stroke(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.16),
                                lineWidth: 0.75)
                 .allowsHitTesting(false)
         }

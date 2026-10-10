@@ -23,22 +23,27 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 0) {
-                header
-                downloadBar
-                Divider().opacity(0.6)
-                content
+            // Do not mount hidden native controls and glass surfaces behind activation.
+            // Parent opacity alone can leave their initial compositing surfaces visible.
+            if libraryVisible {
+                VStack(spacing: 0) {
+                    header
+                    downloadBar
+                    Divider().opacity(0.6)
+                    content
+                }
+                .disabled(activeCard != nil)
+                .allowsHitTesting(activeCard == nil)
+                .accessibilityHidden(activeCard != nil)
+                .transition(.opacity)
             }
-            .opacity(libraryVisible ? 1 : 0)
-            .allowsHitTesting(libraryVisible && activeCard == nil)
-            .accessibilityHidden(!libraryVisible || activeCard != nil)
-            .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.5), value: libraryVisible)
 
             if let screen = activeCard {
                 InfoCard(screen: screen, library: library, license: license, toasts: library.toasts,
                          tools: tools, onKeepOnTopChanged: onKeepOnTopChanged,
                          onShortcutChanged: onShortcutChanged,
                          onShortcutRecordingChanged: onShortcutRecordingChanged,
+                         onActivationRequested: { cardScreen = .activation },
                          onActivated: finishActivation) {
                     cardScreen = nil
                 }
@@ -50,6 +55,7 @@ struct RootView: View {
                     .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.5), value: libraryVisible)
         .animation(.easeOut(duration: 0.14), value: library.isDropTargeted)
         .animation(.easeOut(duration: 0.16), value: activeCard == nil)
         .frame(minWidth: 380, minHeight: 700)
@@ -89,8 +95,10 @@ struct RootView: View {
         guard license.isLicensed else { return }
         cardScreen = welcome ? .welcome : nil
         if !welcome {
-            library.toasts.show(.info, title: "BeatSnap activated",
-                                message: "BeatSnap has been activated successfully.")
+            library.toasts.show(.info, title: license.isTrialMode ? "BeatSnap is in Trial Mode" : "BeatSnap activated",
+                                message: license.isTrialMode
+                                    ? "Try BeatSnap with up to 10 beats in your library."
+                                    : "BeatSnap has been activated successfully.")
         }
     }
 
@@ -192,7 +200,9 @@ struct RootView: View {
                         BeatRowView(beat: beat)
                     }
                     if license.isTrialMode && !library.trialPreviewBeats.isEmpty {
-                        TrialLibraryPreview(beats: library.trialPreviewBeats)
+                        TrialLibraryPreview(beats: library.trialPreviewBeats) {
+                            cardScreen = .activation
+                        }
                     }
                 }
                 .padding(8)

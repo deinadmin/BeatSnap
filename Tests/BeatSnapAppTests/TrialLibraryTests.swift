@@ -33,7 +33,7 @@ struct TrialLibraryTests {
         library.importDroppedFiles([incoming])
         #expect(library.queue.isEmpty)
         #expect(library.toasts.items.last?.title == "BeatSnap is in Trial Mode")
-        #expect(library.toasts.items.last?.message == "Provide a full license to have more than 10 beats in your library.")
+        #expect(library.toasts.items.last?.message == "Provide a license key to have more than 10 beats in your library.")
         library.urlText = "https://example.com/beat.wav"
         await library.submitCurrentURL()
         #expect(library.queue.isEmpty)
