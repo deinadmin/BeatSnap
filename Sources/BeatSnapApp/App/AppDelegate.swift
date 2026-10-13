@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         updateBadge()
         showPanel()
 
+        tools.appUpdater = updater
         Task { await tools.updateIfDue() }
         updater.start()
     }

@@ -520,12 +520,14 @@ struct InfoCard: View {
             }
             return "Not checked yet"
         case .checking:
-            return "Looking for a newer yt-dlp…"
+            return "Checking for updates…"
         case .downloading(let fraction):
             guard let fraction else { return "Downloading yt-dlp…" }
             return "Downloading yt-dlp… \(Int(fraction * 100))%"
         case .upToDate:
-            return "yt-dlp is up to date"
+            return "You're up to date!"
+        case .appUpdateAvailable:
+            return "A new version of BeatSnap is available"
         case .updated(let version):
             return "Updated yt-dlp to \(version)"
         case .failed(let message):

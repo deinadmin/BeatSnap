@@ -16,6 +16,8 @@ final class ToolStatus {
         /// nil while the total download size is still unknown.
         case downloading(Double?)
         case upToDate
+        /// Sparkle found a newer BeatSnap and is showing its own update window.
+        case appUpdateAvailable
         case updated(String)
         case failed(String)
 
@@ -35,7 +37,7 @@ final class ToolStatus {
     private(set) var phase: Phase = .idle {
         didSet {
             if case .failed(let message) = phase {
-                toasts.show(.error, title: "Could not update yt-dlp", message: message)
+                toasts.show(.error, title: "Could not check for updates", message: message)
             }
         }
     }
@@ -43,6 +45,8 @@ final class ToolStatus {
     private(set) var lastChecked: Date?
 
     private let toasts: ToastCenter
+    /// Set by the app delegate; the manual check asks Sparkle about BeatSnap itself first.
+    var appUpdater: AppUpdater?
 
     init(toasts: ToastCenter) {
         self.toasts = toasts
@@ -72,13 +76,28 @@ final class ToolStatus {
         await update()
     }
 
-    /// The info card's button: always checks, whatever the daily throttle says.
+    /// The info card's button: checks BeatSnap through Sparkle (which takes over with its own
+    /// window when an update exists), then yt-dlp, whatever the daily throttle says.
     func checkForUpdates() async {
-        await update()
+        guard !phase.isBusy else { return }
+        phase = .checking
+        var appError: String?
+        if let appUpdater {
+            switch await appUpdater.probe() {
+            case .updateAvailable:
+                phase = .appUpdateAvailable
+                appUpdater.checkForUpdates()
+                return
+            case .upToDate: break
+            case .failed(let message): appError = message
+            }
+        }
+        await update(alreadyChecking: true)
+        if let appError, phase == .upToDate { phase = .failed(appError) }
     }
 
-    private func update() async {
-        guard !phase.isBusy else { return }
+    private func update(alreadyChecking: Bool = false) async {
+        guard alreadyChecking || !phase.isBusy else { return }
         phase = .checking
         lastChecked = Date()
         AppSettings.shared.lastToolUpdateCheck = lastChecked
